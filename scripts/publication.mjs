@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, lstatSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,6 +9,29 @@ const profiles = {
   'api-guide': { adapter: 'api-guide', contentWidth: '48rem' },
   framework: { adapter: 'framework', contentWidth: '56rem' },
 };
+
+const DEFAULT_SOURCE_URL = 'https://github.com/GovStackWorkingGroup/bb-template/blob/main/api-design-guide';
+const ROBOTS_TXT = 'User-agent: *\nDisallow: /\n';
+
+/** The robots meta content for every generated HTML page; unofficial builds also forbid following links. */
+export const robotsContent = (unofficial) => (unofficial ? 'noindex, nofollow' : 'noindex, follow');
+
+/** Blob and edit roots for source links, derived from a GitHub blob URL (https, no query or fragment). */
+export function sourceLinks(sourceUrl = DEFAULT_SOURCE_URL) {
+  let url;
+  try { url = new URL(sourceUrl); } catch { throw new Error(`Source URL must be an absolute https URL: ${sourceUrl}`); }
+  if (url.protocol !== 'https:' || url.search || url.hash || /[?#]/.test(sourceUrl)) throw new Error('Source URL must be an https URL without query or fragment');
+  const blobRoot = `${url.origin}${url.pathname}`.replace(/\/+$/, '');
+  if (!blobRoot.includes('/blob/')) throw new Error('Source URL must be a GitHub blob root such as https://github.com/owner/repo/blob/main');
+  return { blobRoot, editRoot: blobRoot.replace('/blob/', '/edit/') };
+}
+
+/** Crawlers honour robots.txt only at a host root; the meta tag is the control on a project subpath. */
+export async function writeCrawlerPolicy(workspace, unofficial) {
+  if (!unofficial) return;
+  await mkdir(path.join(workspace, 'public'), { recursive: true });
+  await writeFile(path.join(workspace, 'public/robots.txt'), ROBOTS_TXT);
+}
 
 function overlaps(first, second) {
   return first === second || first.startsWith(`${second}${path.sep}`) || second.startsWith(`${first}${path.sep}`);
@@ -28,10 +52,12 @@ function canonicalPath(candidate) {
   }
 }
 
-export function resolveBuild({ profile = 'api-guide', sourceRoot, distDir, base = '/' } = {}) {
+export function resolveBuild({ profile = 'api-guide', sourceRoot, distDir, base = '/', unofficial = false, sourceUrl } = {}) {
   const settings = profiles[profile];
   if (!settings) throw new Error(`Unknown profile: ${profile}`);
   const source = sourceRoot;
+  if (sourceUrl !== undefined && profile !== 'api-guide') throw new Error('--source-url applies only to the api-guide profile');
+  const sourceLinkRoot = sourceUrl === undefined ? undefined : sourceLinks(sourceUrl).blobRoot;
   if (!source) throw new Error(`${profile} requires an explicit source root`);
   if (!base.startsWith('/') || /[?#\\]/.test(base) || base.split('/').some((part) => part === '.' || part === '..')) throw new Error('Base must be an absolute URL path without traversal, query, or fragment');
   const sourcePath = canonicalPath(source);
@@ -40,7 +66,7 @@ export function resolveBuild({ profile = 'api-guide', sourceRoot, distDir, base 
   const output = canonicalPath(distDir || path.join(siteRoot, 'dist', profile));
   if (overlaps(sourcePath, workspace) || overlaps(sourcePath, output) || overlaps(workspace, output)) throw new Error('Source, generated workspace, and output must not overlap');
   if (output.startsWith(`${siteRoot}${path.sep}`) && !output.startsWith(`${path.join(siteRoot, 'dist')}${path.sep}`)) throw new Error('Output inside the renderer must be under dist/');
-  return { ...settings, profile, sourceRoot: sourcePath, workspaceKey, workspace, distDir: output, base: `${base.replace(/\/+$/, '')}/` };
+  return { ...settings, profile, sourceRoot: sourcePath, workspaceKey, workspace, distDir: output, base: `${base.replace(/\/+$/, '')}/`, unofficial: Boolean(unofficial), sourceUrl: sourceLinkRoot };
 }
 
 export function normalizePublication(raw, build) {
@@ -53,7 +79,8 @@ export function normalizePublication(raw, build) {
     profile: build.profile,
     publicationKind: raw.publicationKind ?? null,
     title: raw.title ?? raw.pages.find((page) => page.route === '')?.title,
-    previewLabel: 'Local authoring preview',
+    previewLabel: build.unofficial ? 'Unofficial preview' : 'Local authoring preview',
+    unofficial: build.unofficial,
     contentWidth: build.contentWidth,
     base: build.base,
     sourceRoot: build.sourceRoot,

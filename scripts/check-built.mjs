@@ -25,6 +25,18 @@ function hasAncestor(node, predicate) {
   return false;
 }
 
+function robotsIncludes(nodes, directive) {
+  return nodes.some(
+    (node) =>
+      node.tagName === 'meta' &&
+      attribute(node, 'name')?.toLowerCase() === 'robots' &&
+      attribute(node, 'content')
+        ?.toLowerCase()
+        .split(/[\s,]+/)
+        .includes(directive),
+  );
+}
+
 function textNodes(node, result = []) {
   if (node.nodeName === '#text') result.push(node);
   for (const child of node.childNodes ?? []) textNodes(child, result);
@@ -200,18 +212,14 @@ export async function checkBuilt({ distDir, manifest, base = '/' }) {
     if (nodes.filter((node) => node.tagName === 'h1').length !== 1) {
       errors.push(`${page.source}: expected one page title`);
     }
-    if (
-      !nodes.some(
-        (node) =>
-          node.tagName === 'meta' &&
-          attribute(node, 'name')?.toLowerCase() === 'robots' &&
-          attribute(node, 'content')
-            ?.toLowerCase()
-            .split(/[\s,]+/)
-            .includes('noindex'),
-      )
-    ) {
+    if (!robotsIncludes(nodes, 'noindex')) {
       errors.push(`${page.source}: missing draft noindex metadata`);
+    }
+    if (manifest.unofficial) {
+      if (!nodes.some((node) => attribute(node, 'data-unofficial-banner') !== undefined))
+        errors.push(`${page.source}: missing unofficial banner`);
+      if (!robotsIncludes(nodes, 'nofollow'))
+        errors.push(`${page.source}: missing unofficial nofollow metadata`);
     }
     if (
       page.searchable === false &&
@@ -245,6 +253,17 @@ export async function checkBuilt({ distDir, manifest, base = '/' }) {
         .join('/'),
       source: page.source,
     });
+  }
+
+  if (manifest.unofficial) {
+    const supportHtml = [...(manifest.redirects ?? []).map((item) => item.legacy), ...(manifest.supportIndexes ?? [])];
+    for (const relative of new Set(supportHtml.map(outputPath).filter(Boolean))) {
+      const file = inside(distDir, relative);
+      if (file && (await isFile(file)) && !robotsIncludes(elements(parse(await readFile(file, 'utf8'))), 'nofollow'))
+        errors.push(`${relative}: missing unofficial nofollow metadata`);
+    }
+    if (!(await isFile(path.join(distDir, 'robots.txt'))))
+      errors.push('robots.txt: missing unofficial crawler policy');
   }
 
   const origin = 'https://local.invalid';

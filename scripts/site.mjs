@@ -4,7 +4,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
-import { normalizePublication, resolveBuild, siteRoot } from './publication.mjs';
+import { normalizePublication, resolveBuild, siteRoot, writeCrawlerPolicy } from './publication.mjs';
 import { checkBuilt } from './check-built.mjs';
 import { checkServed } from './check-served.mjs';
 import { withRendererLock } from './lock.mjs';
@@ -47,7 +47,7 @@ async function generate(build) {
   await rm(build.workspace, { recursive: true, force: true });
   await mkdir(build.workspace, { recursive: true });
   const adapter = await import(`../adapters/${build.adapter}.mjs`);
-  const raw = await adapter.generateSite({ sourceRoot: build.sourceRoot, siteRoot: build.workspace, base: build.base });
+  const raw = await adapter.generateSite({ sourceRoot: build.sourceRoot, siteRoot: build.workspace, base: build.base, unofficial: build.unofficial, sourceUrl: build.sourceUrl });
   const publication = normalizePublication(raw, build);
   publication.pages = await Promise.all(publication.pages.map(async (page) => {
     const generated = await readFile(path.join(build.workspace, 'src/content/docs', page.route ? `${page.route}.md` : 'index.md'), 'utf8');
@@ -56,6 +56,7 @@ async function generate(build) {
     return { ...page, searchable: YAML.parse(frontmatter[1]).pagefind !== false };
   }));
   await cp(path.join(siteRoot, 'public'), path.join(build.workspace, 'public'), { recursive: true });
+  await writeCrawlerPolicy(build.workspace, build.unofficial);
   await writeFile(path.join(build.workspace, 'publication.json'), `${JSON.stringify(publication, null, 2)}\n`);
   console.log(`${publication.title}: ${publication.pages.length} pages, ${publication.sourceDigest}`);
   return publication;
@@ -71,15 +72,26 @@ async function checkedOutput(build, publication, served) {
   }
 }
 
-export async function main(args = process.argv.slice(2)) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
+export function parseCli(args) {
+  return parseArgs({ args, allowPositionals: true, options: {
     profile: { type: 'string' }, source: { type: 'string' }, output: { type: 'string' }, base: { type: 'string' }, port: { type: 'string' },
+    unofficial: { type: 'boolean' }, 'source-url': { type: 'string' },
   } });
+}
+
+// Each option falls back to its DOCS_* variable; DOCS_UNOFFICIAL is on for any value other than empty or 0.
+export function buildOptions(values, env) {
+  return { profile: values.profile || env.DOCS_PROFILE || 'api-guide', sourceRoot: values.source || env.DOCS_SOURCE_ROOT, distDir: values.output || env.DOCS_DIST_DIR, base: values.base || env.DOCS_BASE || '/', unofficial: values.unofficial ?? !['', '0', undefined].includes(env.DOCS_UNOFFICIAL), sourceUrl: values['source-url'] || env.DOCS_SOURCE_URL || undefined };
+}
+
+export async function main(args = process.argv.slice(2)) {
+  const { values, positionals } = parseCli(args);
   const command = positionals[0] || 'check';
   if (!['generate', 'dev', 'build', 'preview', 'test', 'check-built', 'test-served', 'check'].includes(command)) throw new Error(`Unknown command: ${command}`);
   if (command === 'test') return run(process.execPath, ['--test', 'tests/*.test.mjs'], process.env);
-  let build = resolveBuild({ profile: values.profile || process.env.DOCS_PROFILE || 'api-guide', sourceRoot: values.source || process.env.DOCS_SOURCE_ROOT, distDir: values.output || process.env.DOCS_DIST_DIR, base: values.base || process.env.DOCS_BASE || '/' });
-  build = resolveBuild({ ...build, sourceRoot: await realpath(build.sourceRoot) });
+  const options = buildOptions(values, process.env);
+  let build = resolveBuild(options);
+  build = resolveBuild({ ...options, sourceRoot: await realpath(build.sourceRoot) });
   const generatedRoot = path.join(siteRoot, '.generated');
   await mkdir(generatedRoot, { recursive: true });
   if (await realpath(generatedRoot) !== generatedRoot) throw new Error('Generated root must not be redirected by symlinks');

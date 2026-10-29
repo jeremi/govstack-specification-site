@@ -21,6 +21,7 @@ import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
 import YAML from 'yaml';
 
+import { robotsContent } from '../scripts/publication.mjs';
 import { isPublishableSupportPath } from '../scripts/support-paths.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -617,16 +618,19 @@ ${authorRows}
 `;
 }
 
-function generatedFrontmatter({ title, description, pagefind }) {
+// Redirect and download index pages keep the bare noindex unless the build is unofficial.
+const supportRobots = (unofficial) => (unofficial ? robotsContent(true) : 'noindex');
+
+function generatedFrontmatter({ title, description, pagefind }, unofficial) {
   return `---\n${YAML.stringify({
     title,
     description,
     ...(pagefind === false ? { pagefind: false } : {}),
-    head: [{ tag: 'meta', attrs: { name: 'robots', content: 'noindex, follow' } }],
+    head: [{ tag: 'meta', attrs: { name: 'robots', content: robotsContent(unofficial) } }],
   })}---\n\n`;
 }
 
-function transformBody({ page, pageRoutes, pageAnchors, base, metadata, authors }) {
+function transformBody({ page, pageRoutes, pageAnchors, base, metadata, authors, unofficial }) {
   const { sourceName, source, tree, frontmatter, headings, title } = page;
   const replacements = [];
   if (page.frontmatterNode) {
@@ -675,7 +679,7 @@ function transformBody({ page, pageRoutes, pageAnchors, base, metadata, authors 
       : sourceName === 'README.md'
         ? metadata.abstract
         : `${title} in the Digital Registries specification.`;
-  return `${generatedFrontmatter({ title, description, pagefind: isArchive ? false : undefined })}${body}`;
+  return `${generatedFrontmatter({ title, description, pagefind: isArchive ? false : undefined }, unofficial)}${body}`;
 }
 
 function sidebarFromToc(toc, pagesBySource, ordered) {
@@ -789,12 +793,12 @@ async function copySupportFiles(sourceRoot, siteRoot, pageSources, snapshots, re
   return copied.toSorted();
 }
 
-function redirectHtml(target) {
+function redirectHtml(target, unofficial) {
   const encoded = JSON.stringify(target);
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex"><meta http-equiv="refresh" content="0;url=${htmlEscape(target)}"><title>Redirecting…</title></head><body data-pagefind-ignore><p><a href="${htmlEscape(target)}">Continue to the Starlight page</a></p><script>location.replace(${encoded} + location.search + location.hash);</script></body></html>\n`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="${supportRobots(unofficial)}"><meta http-equiv="refresh" content="0;url=${htmlEscape(target)}"><title>Redirecting…</title></head><body data-pagefind-ignore><p><a href="${htmlEscape(target)}">Continue to the Starlight page</a></p><script>location.replace(${encoded} + location.search + location.hash);</script></body></html>\n`;
 }
 
-async function writeRedirects(siteRoot, pages, base) {
+async function writeRedirects(siteRoot, pages, base, unofficial) {
   const redirects = [];
   for (const page of pages) {
     if (page.sourceName === 'README.md') continue;
@@ -802,7 +806,7 @@ async function writeRedirects(siteRoot, pages, base) {
     const target = baseUrl(base, page.route ? `${page.route}/` : '');
     const output = path.join(siteRoot, 'public', legacy);
     await mkdir(path.dirname(output), { recursive: true });
-    await writeFile(output, redirectHtml(target));
+    await writeFile(output, redirectHtml(target, unofficial));
     redirects.push({ legacy, target });
   }
   return redirects;
@@ -815,6 +819,7 @@ async function writeSupportDirectoryIndexes(
   pageRoutes,
   base,
   referencedPaths,
+  unofficial,
 ) {
   const indexes = [];
   const directories = new Set();
@@ -901,7 +906,7 @@ async function writeSupportDirectoryIndexes(
     await mkdir(path.dirname(output), { recursive: true });
     await writeFile(
       output,
-      `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>${htmlEscape(directory)} downloads</title></head><body data-pagefind-ignore><main><h1>${htmlEscape(directory)} downloads</h1><p>Source support files for the local Digital Registries preview.</p><ul>${links.join('')}</ul></main></body></html>\n`,
+      `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="${supportRobots(unofficial)}"><title>${htmlEscape(directory)} downloads</title></head><body data-pagefind-ignore><main><h1>${htmlEscape(directory)} downloads</h1><p>Source support files for the local Digital Registries preview.</p><ul>${links.join('')}</ul></main></body></html>\n`,
     );
     indexes.push(`${directory}/index.html`);
   }
@@ -954,7 +959,7 @@ function addArchiveCompatibilityAnchors(loaded, warnings) {
   }
 }
 
-export async function generateSite({ sourceRoot, siteRoot, base = '/' }) {
+export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficial = false }) {
   if (!sourceRoot || !siteRoot) throw new Error('generateSite requires sourceRoot and siteRoot');
   const absoluteSourceRoot = await realpath(path.resolve(sourceRoot));
   const absoluteSiteRoot = path.resolve(siteRoot);
@@ -1023,6 +1028,7 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/' }) {
       base: normalizedBase,
       metadata,
       authors,
+      unofficial,
     });
     const relative = page.route ? `${page.route}.md` : 'index.md';
     const destination = path.join(absoluteSiteRoot, 'src/content/docs', relative);
@@ -1044,8 +1050,9 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/' }) {
     pageRoutes,
     normalizedBase,
     referencedSupportPaths,
+    unofficial,
   );
-  const redirects = await writeRedirects(absoluteSiteRoot, loaded, normalizedBase);
+  const redirects = await writeRedirects(absoluteSiteRoot, loaded, normalizedBase, unofficial);
   const sourceState = await gitSourceState(absoluteSourceRoot);
   const version = (metadata.versions.find((item) => item.latest) ?? metadata.versions[0]).version;
   const manifest = {

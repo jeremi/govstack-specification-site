@@ -81,8 +81,7 @@ async function fetchLocal(url) {
   return fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(5_000) });
 }
 
-function hasDraftMarker(nodes, html) {
-  if (html.includes('Local authoring preview')) return true;
+function hasRobots(nodes, directive) {
   return nodes.some(
     (node) =>
       node.tagName === 'meta' &&
@@ -90,8 +89,13 @@ function hasDraftMarker(nodes, html) {
       attribute(node, 'content')
         ?.toLowerCase()
         .split(/[\s,]+/)
-        .includes('noindex'),
+        .includes(directive),
   );
+}
+
+function hasDraftMarker(nodes, html) {
+  if (html.includes('Local authoring preview')) return true;
+  return hasRobots(nodes, 'noindex');
 }
 
 function countRequirementCards(nodes) {
@@ -216,7 +220,19 @@ export async function checkServed({
           `${page.source}: served page lacks Local authoring preview or noindex metadata`,
         );
       }
+      if (manifest.unofficial) {
+        if (!nodes.some((node) => attribute(node, 'data-unofficial-banner') !== undefined))
+          errors.push(`${page.source}: served page lacks the unofficial banner`);
+        if (!hasRobots(nodes, 'nofollow'))
+          errors.push(`${page.source}: served page lacks nofollow metadata`);
+      }
       requirements += countRequirementCards(nodes);
+    }
+
+    if (manifest.unofficial) {
+      const response = await fetchLocal(`${origin}${normalizedBase}robots.txt`);
+      if (response.status !== 200)
+        errors.push(`robots.txt: unofficial crawler policy returned ${response.status}`);
     }
 
     for (const searchFile of searchFiles) {

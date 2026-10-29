@@ -41,6 +41,31 @@ All previews bind to loopback. No deployment or publication command is included.
 `dev` generates source content once; regenerate after editing the authoritative
 input. Use a static build plus `preview` to verify the Pagefind search index.
 
+## Unofficial deployments
+
+Pass `--unofficial` (or set `DOCS_UNOFFICIAL=1`) when a build is published
+outside the GovStack process. Every page then carries a non-dismissible
+"Unofficial preview" warning banner that links to https://specs.govstack.global/,
+the preview label becomes "Unofficial preview", every HTML page (including
+legacy redirects and download indexes) gets `<meta name="robots" content="noindex, nofollow">`,
+and the site root gets a `robots.txt` with `User-agent: *` and `Disallow: /`.
+`check-built` and `test-served` then also require the banner, `nofollow`, and
+`robots.txt`. Without the flag, output is unchanged.
+
+Crawlers honour `robots.txt` only at a host root. On a GitHub Pages project
+subpath (for example `/govstack-api-design-guide/`) the file is not consulted,
+so the meta tag is the effective control there.
+
+`--source-url <github blob root>` (or `DOCS_SOURCE_URL`) sets where the
+`api-guide` profile points "Edit page" and linter links. It must be an `https://`
+URL without query or fragment, and contain `/blob/`; the edit root swaps `/blob/`
+for `/edit/`. The default is the `bb-template/api-design-guide` location.
+Example deploy build for a guide that lives at the root of its own repository:
+
+```sh
+npm run check -- --profile api-guide --source /absolute/path/to/govstack-api-design-guide --base /govstack-api-design-guide/ --unofficial --source-url https://github.com/jeremi/govstack-api-design-guide/blob/main
+```
+
 ## Tests
 
 `npm test` runs the fixture tests. Four tests need an external checkout and are

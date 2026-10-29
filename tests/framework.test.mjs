@@ -282,6 +282,19 @@ test('home metadata renders structured extensions and null author URNs faithfull
   }
 });
 
+test('unofficial generation marks pages, redirects, and download indexes nofollow', async () => {
+  const official = await fixture();
+  await generateSite({ sourceRoot: official.sourceRoot, siteRoot: official.siteRoot, base: '/' });
+  const unofficial = await fixture();
+  await generateSite({ sourceRoot: unofficial.sourceRoot, siteRoot: unofficial.siteRoot, base: '/', unofficial: true });
+  const files = ['src/content/docs/index.md', 'public/requirements/service.html', 'public/api/extensions/index.html'];
+  for (const file of files) {
+    assert.doesNotMatch(await readFile(path.join(official.siteRoot, file), 'utf8'), /nofollow/, file);
+    assert.match(await readFile(path.join(unofficial.siteRoot, file), 'utf8'), /noindex, nofollow/, file);
+  }
+  assert.match(await readFile(path.join(official.siteRoot, 'public/requirements/service.html'), 'utf8'), /content="noindex"/);
+});
+
 test('implicit heading anchors retain decoded trailing spaces used by native Astro slugs', async () => {
   const { sourceRoot, siteRoot } = await fixture();
   const sourcePath = path.join(sourceRoot, 'resources/testing.md');

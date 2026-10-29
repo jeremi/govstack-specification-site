@@ -121,6 +121,24 @@ header.header {
 .draft-banner a { margin-inline-start: auto; color: inherit; text-underline-offset: 0.15em; }
 :root[data-theme='dark'] .draft-banner { background: #302b18; color: #edda91; border-color: #52472a; }
 
+/* Unofficial deployments carry a strong, non-dismissible warning above every page. */
+.unofficial-banner {
+  margin: 1.75rem var(--sl-content-pad-x) 0;
+  padding: 0.85rem 1rem;
+  background: #fff1d6;
+  color: #4a1f00;
+  border: 1px solid #d9822b;
+  border-inline-start: 0.4rem solid #b42318;
+  border-radius: 0.45rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.unofficial-banner p { margin: 0; }
+.unofficial-banner .unofficial-banner-title { font-size: 1.0625rem; font-weight: 700; letter-spacing: 0.01em; text-transform: uppercase; }
+.unofficial-banner a { color: inherit; font-weight: 600; text-underline-offset: 0.15em; }
+:root[data-theme='dark'] .unofficial-banner { background: #3b1a0d; color: #ffe3c4; border-color: #e0793a; border-inline-start-color: #ff6b5a; }
+
 /* A title and its prose belong to one continuous document, without divider panels. */
 .content-panel + .content-panel { border-top: 0; padding-top: 0; }
 .content-panel { padding-block: 1.5rem; }
@@ -298,6 +316,7 @@ main h1 {
   .guide-header [data-open-modal] { border: 0; box-shadow: none; width: 2.5rem; height: 2.5rem; }
   .guide-header-links { display: none; }
   .draft-banner { margin-top: 1rem; font-size: 0.75rem; }
+  .unofficial-banner { margin-top: 1rem; font-size: 0.8125rem; }
   .draft-banner a { margin-inline-start: 0; }
   main h1 { font-size: 1.875rem; }
   .sl-markdown-content th,

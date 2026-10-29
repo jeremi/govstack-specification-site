@@ -151,6 +151,16 @@ test('remarkGuideAnchors promotes an explicit heading anchor to the rendered hea
   assert.deepEqual(tree.children[0].children, [{ type: 'text', value: 'A renamed heading' }]);
 });
 
+test('generateSite derives source links from sourceUrl and honours unofficial robots', async () => {
+  const { sourceRoot, siteRoot } = await fixture();
+  await generateSite({ sourceRoot, siteRoot, sourceUrl: 'https://github.com/jeremi/govstack-api-design-guide/blob/main', unofficial: true });
+  const home = await readFile(path.join(siteRoot, 'src/content/docs/index.md'), 'utf8');
+  assert.match(home, /editUrl: https:\/\/github\.com\/jeremi\/govstack-api-design-guide\/edit\/main\/README\.md/);
+  assert.match(home, /\(https:\/\/github\.com\/jeremi\/govstack-api-design-guide\/blob\/main\/linter\/README\.md\)/);
+  assert.match(home, /content: noindex, nofollow/);
+  assert.doesNotMatch(home, /GovStackWorkingGroup/);
+});
+
 test('generateSite builds frontmatter, routes, downloads, links, asides, and stable anchors', async () => {
   const { sourceRoot, siteRoot } = await fixture();
   const before = await readFile(path.join(sourceRoot, 'README.md'), 'utf8');

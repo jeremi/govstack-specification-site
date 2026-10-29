@@ -12,9 +12,9 @@ import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
 import YAML from 'yaml';
 
+import { robotsContent, sourceLinks } from '../scripts/publication.mjs';
+
 const execFileAsync = promisify(execFile);
-const EDIT_ROOT = 'https://github.com/GovStackWorkingGroup/bb-template/edit/main/api-design-guide';
-const BLOB_ROOT = 'https://github.com/GovStackWorkingGroup/bb-template/blob/main/api-design-guide';
 const SPECIAL_DOWNLOADS = new Map([
   ['rules.yaml', 'rules.yaml'],
   ['linter/coverage.yaml', 'linter/coverage.yaml'],
@@ -225,7 +225,7 @@ function linkDestinationRange(source, node, sourceName) {
   return { start: start + relativeStart, end: start + relativeEnd };
 }
 
-function rewriteRelativeLink({ url, sourceName, pageRoutes, pageAnchors, base }) {
+function rewriteRelativeLink({ url, sourceName, pageRoutes, pageAnchors, base, blobRoot }) {
   if (/^[A-Za-z][A-Za-z+.-]*:/.test(url) || url.startsWith('//') || url.startsWith('/')) return url;
   if (url.startsWith('#')) {
     const fragment = url.slice(1);
@@ -243,7 +243,7 @@ function rewriteRelativeLink({ url, sourceName, pageRoutes, pageAnchors, base })
   const pathname = queryAt >= 0 ? withoutFragment.slice(0, queryAt) : withoutFragment;
   const target = path.posix.normalize(path.posix.join(path.posix.dirname(sourceName), pathname));
 
-  if (target === 'linter/README.md') return `${BLOB_ROOT}/linter/README.md${fragment}`;
+  if (target === 'linter/README.md') return `${blobRoot}/linter/README.md${fragment}`;
   if (SPECIAL_DOWNLOADS.has(target)) return `${baseUrl(base, `downloads/${SPECIAL_DOWNLOADS.get(target)}`)}${fragment}`;
   if (!target.endsWith('.md') || !pageRoutes.has(target)) {
     throw new Error(`${sourceName}: unknown relative link target ${url}`);
@@ -258,7 +258,7 @@ function rewriteRelativeLink({ url, sourceName, pageRoutes, pageAnchors, base })
   return `${baseUrl(base, pageRoutes.get(target))}${query}${fragment}`;
 }
 
-function linkReplacements({ tree, source, sourceName, pageRoutes, pageAnchors, base }) {
+function linkReplacements({ tree, source, sourceName, pageRoutes, pageAnchors, base, blobRoot }) {
   const replacements = [];
   visit(tree, 'link', (node) => {
     const rewritten = rewriteRelativeLink({
@@ -267,6 +267,7 @@ function linkReplacements({ tree, source, sourceName, pageRoutes, pageAnchors, b
       pageRoutes,
       pageAnchors,
       base,
+      blobRoot,
     });
     if (rewritten === node.url) return;
     replacements.push({ ...linkDestinationRange(source, node, sourceName), value: rewritten });
@@ -288,12 +289,12 @@ function applyReplacements(source, replacements, sourceName) {
   return result;
 }
 
-function generatedFrontmatter({ title, description, source }) {
+function generatedFrontmatter({ title, description, source }, { editRoot, unofficial }) {
   return `---\n${YAML.stringify({
     title,
     description,
-    editUrl: `${EDIT_ROOT}/${source}`,
-    head: [{ tag: 'meta', attrs: { name: 'robots', content: 'noindex, follow' } }],
+    editUrl: `${editRoot}/${source}`,
+    head: [{ tag: 'meta', attrs: { name: 'robots', content: robotsContent(unofficial) } }],
   })}---\n\n`;
 }
 
@@ -372,8 +373,9 @@ function sourceDigest(inputs) {
   return `sha256:${hash.digest('hex')}`;
 }
 
-export async function generateSite({ sourceRoot, siteRoot, base = '/' }) {
+export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficial = false, sourceUrl }) {
   if (!sourceRoot || !siteRoot) throw new Error('generateSite requires sourceRoot and siteRoot');
+  const { blobRoot, editRoot } = sourceLinks(sourceUrl);
   const absoluteSourceRoot = await realpath(path.resolve(sourceRoot));
   const absoluteSiteRoot = path.resolve(siteRoot);
   const normalizedBase = normalizeBase(base);
@@ -431,10 +433,11 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/' }) {
         pageRoutes,
         pageAnchors,
         base: normalizedBase,
+        blobRoot,
       }),
     ];
     const body = applyReplacements(page.sourceText, replacements, page.source);
-    const output = `${generatedFrontmatter(page)}${body.replace(/^\s+/, '')}`;
+    const output = `${generatedFrontmatter(page, { editRoot, unofficial })}${body.replace(/^\s+/, '')}`;
     const outputPath = pageOutputPath(absoluteSiteRoot, page.route);
     await mkdir(path.dirname(outputPath), { recursive: true });
     await writeFile(outputPath, output);

@@ -4,7 +4,7 @@ import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import mermaid from 'astro-mermaid';
 import remarkGuideAnchors from './scripts/remark-guide-anchors.mjs';
-import { readPublication, siteRoot } from './scripts/publication.mjs';
+import { readPublication, robotsContent, siteRoot } from './scripts/publication.mjs';
 
 const publication = readPublication();
 // readPublication() has already thrown if the workspace is unset.
@@ -34,7 +34,7 @@ export default defineConfig({
         Footer: './src/components/PublicationFooter.astro',
       },
       head: [
-        { tag: 'meta', attrs: { name: 'robots', content: 'noindex, follow' } },
+        { tag: 'meta', attrs: { name: 'robots', content: robotsContent(publication.unofficial) } },
         { tag: 'style', content: `:root { --publication-content-width: ${publication.contentWidth}; }` },
       ],
       pagination: true,

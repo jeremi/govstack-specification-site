@@ -309,3 +309,58 @@ test('falls back to staged public downloads when sourceRoot is absent', async (t
   const summary = await checkServed(options);
   assert.equal(summary.downloads, 1);
 });
+
+const unofficialHead =
+  '<!doctype html><html lang="en"><head><meta name="robots" content="noindex, nofollow"></head><body><aside data-unofficial-banner role="note">Unofficial preview</aside>';
+
+async function unofficialFixture(t) {
+  const options = await builtFixture(t);
+  for (const file of ['index.html', 'chapter/index.html']) {
+    const html = await readFile(path.join(options.distDir, file), 'utf8');
+    await write(options.distDir, file, html.replace(draftHead, unofficialHead));
+  }
+  for (const file of ['legacy/chapter.html', 'resources/index.html']) {
+    const html = await readFile(path.join(options.distDir, file), 'utf8');
+    await write(options.distDir, file, html.replace('noindex, follow', 'noindex, nofollow'));
+  }
+  await write(options.distDir, 'robots.txt', 'User-agent: *\nDisallow: /\n');
+  options.manifest.unofficial = true;
+  return options;
+}
+
+test('an unofficial build passes with banner, nofollow, and robots.txt', async (t) => {
+  const result = await checkBuilt(await unofficialFixture(t));
+  assert.deepEqual(result.errors, []);
+});
+
+test('an unofficial build fails when a page lacks the banner marker', async (t) => {
+  const options = await unofficialFixture(t);
+  const html = await readFile(path.join(options.distDir, 'chapter/index.html'), 'utf8');
+  await write(options.distDir, 'chapter/index.html', html.replace(' data-unofficial-banner', ''));
+  assert.match((await checkBuilt(options)).errors.join('\n'), /chapter\.md: missing unofficial banner/);
+});
+
+test('an unofficial build fails when robots metadata lacks nofollow', async (t) => {
+  const options = await unofficialFixture(t);
+  const html = await readFile(path.join(options.distDir, 'index.html'), 'utf8');
+  await write(options.distDir, 'index.html', html.replace('noindex, nofollow', 'noindex, follow'));
+  assert.match((await checkBuilt(options)).errors.join('\n'), /README\.md: missing unofficial nofollow metadata/);
+});
+
+test('an unofficial build fails when a redirect page lacks nofollow', async (t) => {
+  const options = await unofficialFixture(t);
+  await write(options.distDir, 'legacy/chapter.html', `${draftHead}<h1>Redirect</h1></body></html>`);
+  assert.match((await checkBuilt(options)).errors.join('\n'), /legacy\/chapter\.html: missing unofficial nofollow metadata/);
+});
+
+test('an unofficial build fails without robots.txt', async (t) => {
+  const options = await unofficialFixture(t);
+  await rm(path.join(options.distDir, 'robots.txt'));
+  assert.match((await checkBuilt(options)).errors.join('\n'), /robots\.txt: missing unofficial crawler policy/);
+});
+
+test('official builds are not required to carry the unofficial markers', async (t) => {
+  const options = await builtFixture(t);
+  options.manifest.unofficial = false;
+  assert.deepEqual((await checkBuilt(options)).errors, []);
+});

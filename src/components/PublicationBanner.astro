@@ -2,7 +2,14 @@
 import { readPublication } from '../../scripts/publication.mjs';
 const publication = readPublication();
 ---
-<aside class="draft-banner" aria-label="Preview status" data-pagefind-ignore>
-  <strong>{publication.version}</strong>
-  <span>{publication.previewLabel}</span>
-</aside>
+{publication.unofficial ? (
+  <aside class="unofficial-banner" role="note" aria-label="Unofficial deployment notice" data-unofficial-banner data-pagefind-ignore>
+    <p class="unofficial-banner-title">Unofficial preview</p>
+    <p>This is not an official GovStack site. It is a draft maintained outside the GovStack process; its content may change or be withdrawn and must not be cited as a GovStack specification. Official specifications: <a href="https://specs.govstack.global/">specs.govstack.global</a></p>
+  </aside>
+) : (
+  <aside class="draft-banner" aria-label="Preview status" data-pagefind-ignore>
+    <strong>{publication.version}</strong>
+    <span>{publication.previewLabel}</span>
+  </aside>
+)}
