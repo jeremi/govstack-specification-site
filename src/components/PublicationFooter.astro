@@ -1,0 +1,12 @@
+---
+import DefaultFooter from '@astrojs/starlight/components/Footer.astro';
+import { readPublication } from '../../scripts/publication.mjs';
+const publication = readPublication();
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+<DefaultFooter><slot /></DefaultFooter>
+<div class="guide-provenance" data-pagefind-ignore>
+  <p>{publication.previewLabel} · {publication.version} · Source revision <code>{publication.sourceRevision.slice(0, 8)}</code>{publication.sourceDirty ? ' with local source changes' : ''}.</p>
+  <p>Content snapshot <code title={publication.sourceDigest}>{publication.sourceDigest.slice(7, 19)}</code>.</p>
+  <p>{publication.downloads.map((item: { output: string; label: string }, index: number) => <><span aria-hidden="true">{index ? ' · ' : ''}</span><a href={`${base}/${item.output}`}>{item.label}</a></>)}</p>
+</div>

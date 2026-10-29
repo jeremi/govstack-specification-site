@@ -1,0 +1,13 @@
+---
+import SiteTitle from '@astrojs/starlight/components/SiteTitle.astro';
+import Search from '@astrojs/starlight/components/Search.astro';
+import ThemeSelect from '@astrojs/starlight/components/ThemeSelect.astro';
+---
+<div class="guide-header">
+  <div class="guide-header-brand"><SiteTitle /></div>
+  <div class="guide-header-search"><Search /></div>
+  <nav class="guide-header-links" aria-label="GovStack links">
+    <a class="govstack-website" href="https://govstack.global/">GovStack Website</a>
+    <ThemeSelect />
+  </nav>
+</div>

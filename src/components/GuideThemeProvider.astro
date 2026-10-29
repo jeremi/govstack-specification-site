@@ -1,0 +1,12 @@
+---
+import ThemeProvider from '@astrojs/starlight/components/ThemeProvider.astro';
+---
+<!-- Start with GovStack's light documentation treatment; retain an explicit reader choice. -->
+<script is:inline>
+  try {
+    if (!localStorage.getItem('starlight-theme')) localStorage.setItem('starlight-theme', 'light');
+  } catch (error) {
+    console.warn('The preferred guide theme could not be saved.', error);
+  }
+</script>
+<ThemeProvider />

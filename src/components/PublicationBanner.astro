@@ -1,0 +1,8 @@
+---
+import { readPublication } from '../../scripts/publication.mjs';
+const publication = readPublication();
+---
+<aside class="draft-banner" aria-label="Preview status" data-pagefind-ignore>
+  <strong>{publication.version}</strong>
+  <span>{publication.previewLabel}</span>
+</aside>
