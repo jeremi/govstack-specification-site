@@ -64,8 +64,10 @@ skipped, with the reason printed, unless these variables are set:
 
 ## Not yet
 
-There is no remote and no version pinning. Until a remote and tags exist,
-consumers point `GOVSTACK_SITE_RENDERER` at a local checkout of this repository.
+The repository is published at
+<https://github.com/jeremi/govstack-specification-site>, but there are no tagged
+releases and no version pinning yet. Until tags exist, consumers point
+`GOVSTACK_SITE_RENDERER` at a local checkout of this repository.
 
 ## Ownership and generated files
 
