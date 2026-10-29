@@ -35,7 +35,7 @@ The linter checks schema formats; UTC values require implementation tests.
   await writeFile(path.join(sourceRoot, 'rules.yaml'), 'version: 0.3.0-draft\nrules:\n  - id: "10.2"\n    class: M\n');
   await writeFile(path.join(sourceRoot, 'linter/coverage.yaml'), 'rules: []\n');
   execFileSync('git', ['init', '-q', sourceRoot]);
-  execFileSync('git', ['-C', sourceRoot, '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '--allow-empty', '-qm', 'test: capture fixture baseline']);
+  execFileSync('git', ['-C', sourceRoot, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '--allow-empty', '-qm', 'test: capture fixture baseline']);
   const manifest = await generateSite({ sourceRoot, siteRoot });
   assert.ok(manifest.pages[0].anchors.some((anchor) => anchor.id === '102-timestamps'));
   const generated = await readFile(path.join(siteRoot, 'src/content/docs/index.md'), 'utf8');
