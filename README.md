@@ -136,3 +136,8 @@ requirement totals. Browser QA covers search interaction, theme and mobile
 behavior, diagrams, and heading-link spacing. Static checks alone do not
 establish those interactions. Tests compare source bytes before and after
 generation, with current Git state rather than a pinned session commit.
+
+## License
+
+The renderer is licensed under the [Apache License 2.0](LICENSE). The GovStack
+logos in `src/assets/` belong to GovStack and are not covered by this license.
