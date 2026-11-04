@@ -122,7 +122,11 @@ requirements:
 
 # Consultation workflow
 
-The source Registry remains authoritative.
+The source Registry remains authoritative. Follow the [testing workflow](../resources/testing.md#consultation-1).
+
+## Data structures
+
+Registry Records carry the declared representation.
 `);
   await write(sourceRoot, 'resources/testing.md', `# Testing
 
@@ -154,6 +158,24 @@ Supporting text.
   await execFileAsync('git', ['-C', root, 'add', 'source']);
   await execFileAsync('git', ['-C', root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture']);
   return { root, sourceRoot, siteRoot };
+}
+
+async function assertArchivePagesExcluded(siteRoot, pages) {
+  const archives = pages.filter(
+    ({ source }) => source.startsWith('resources/history/') || source.includes('/legacy/'),
+  );
+  for (const archive of archives) {
+    const relative = archive.route ? `${archive.route}.md` : 'index.md';
+    const renderedArchive = await readFile(
+      path.join(siteRoot, 'src/content/docs', relative),
+      'utf8',
+    );
+    assert.match(
+      renderedArchive,
+      /^pagefind: false$/m,
+      `${archive.source} must stay out of default search`,
+    );
+  }
 }
 
 test('shared adapter module has no standalone CLI behavior', async () => {
@@ -327,6 +349,7 @@ test('generator rewrites routes, renders requirement semantics, copies aliases, 
   assert.match(requirements, /^title: Provide Registry Services$/m);
   assert.doesNotMatch(requirements, /^# Provide Registry Services$/m);
   assert.match(requirements, /^## Consultation workflow$/m);
+  assert.match(requirements, /^## Data structures$/m);
   assert.equal((requirements.match(/class="requirement-draft-id">Unnumbered draft/g) ?? []).length, 4);
   assert.match(requirements, /class="requirement-card variation-point"/);
   assert.match(requirements, /class="requirement-card-title requirement-statement"/);
@@ -359,6 +382,93 @@ test('generator rewrites routes, renders requirement semantics, copies aliases, 
   assert.match(
     await readFile(path.join(siteRoot, 'public/api/extensions/index.html'), 'utf8'),
     /example\.schema\.json/,
+  );
+});
+
+test('functionality reading order keeps source explanations before requirement cards', async () => {
+  const { sourceRoot, siteRoot } = await fixture();
+  const sourcePath = path.join(sourceRoot, 'requirements/service.md');
+  const sourceBefore = await readFile(sourcePath);
+
+  const manifest = await generateSite({ sourceRoot, siteRoot, base: '/' });
+  const output = await readFile(
+    path.join(siteRoot, 'src/content/docs/requirements/service.md'),
+    'utf8',
+  );
+
+  const summaryStart = output.indexOf('<div class="functionality-summary">');
+  const summaryEnd = output.indexOf('\n</div>', summaryStart);
+  assert.ok(summaryStart >= 0 && summaryEnd > summaryStart, 'functionality summary is missing');
+  assert.match(
+    output.slice(summaryStart, summaryEnd),
+    /Consumers use declared Registry services\.[\s\S]*Capabilities[\s\S]*Conformance/,
+  );
+  const markers = [
+    '<div class="functionality-summary">',
+    '## Consultation workflow',
+    'The source Registry remains authoritative.',
+    '## Data structures',
+    'Registry Records carry the declared representation.',
+    '## Requirements',
+    '<div class="requirements-list">',
+    '<article class="requirement-card variation-point"',
+  ];
+  for (let index = 1; index < markers.length; index += 1) {
+    const before = markers[index - 1];
+    const after = markers[index];
+    assert.ok(
+      output.indexOf(before) < output.indexOf(after),
+      `${JSON.stringify(before)} must precede ${JSON.stringify(after)}`,
+    );
+  }
+  assert.equal((output.match(/<div class="functionality-summary">/g) ?? []).length, 1);
+  assert.equal((output.match(/^## Requirements$/gm) ?? []).length, 1);
+  assert.equal((output.match(/<article class="requirement-card /g) ?? []).length, 4);
+  assert.deepEqual(
+    [...output.matchAll(/<article class="requirement-card [^"]+" id="requirement-(\d+)"/g)].map(
+      (match) => match[1],
+    ),
+    ['1', '2', '3', '4'],
+  );
+  const statementOrder = [
+    'Provide at least one service.',
+    'Retrieve one Record.',
+    'Return the declared representation.',
+    'Apply the combined profile rules.',
+  ];
+  for (let index = 1; index < statementOrder.length; index += 1) {
+    assert.ok(
+      output.indexOf(statementOrder[index - 1]) < output.indexOf(statementOrder[index]),
+      `${JSON.stringify(statementOrder[index - 1])} must precede ${JSON.stringify(statementOrder[index])}`,
+    );
+  }
+  assert.match(output, /\[testing workflow\]\(\/resources\/testing\/#consultation-1\)/);
+  assert.deepEqual(
+    manifest.pages.find(({ source }) => source === 'requirements/service.md')?.anchors,
+    [{ id: 'consultation-workflow' }, { id: 'data-structures' }],
+  );
+  assert.equal((await readFile(sourcePath)).compare(sourceBefore), 0, 'functionality source bytes changed');
+});
+
+test('archive search exclusion follows the generated route rather than the source filename', async () => {
+  const { sourceRoot, siteRoot } = await fixture();
+  const tocPath = path.join(sourceRoot, 'toc.yml');
+  await writeFile(
+    tocPath,
+    `${await readFile(tocPath, 'utf8')}  resources/history:\n    - Release Notes.md\n`,
+  );
+  await write(sourceRoot, 'resources/history/Release Notes.md', '# Release notes\n\nHistorical context.\n');
+
+  const manifest = await generateSite({ sourceRoot, siteRoot, base: '/' });
+  const archive = manifest.pages.find(
+    ({ source }) => source === 'resources/history/Release Notes.md',
+  );
+  assert.equal(archive?.route, 'resources/history/release-notes');
+
+  await assertArchivePagesExcluded(siteRoot, manifest.pages);
+  assert.match(
+    await readFile(path.join(siteRoot, 'src/content/docs/resources/history/release-notes.md'), 'utf8'),
+    /:::caution\[Archived source\]/,
   );
 });
 
@@ -608,16 +718,7 @@ test('canonical source integration renders its requirements without changing sou
   assert.match(requirements, /Any of/);
   assert.match(requirements, /Minimum selections/);
 
-  const releaseNotes = 'resources/history/release-notes.md';
-  const renderedReleaseNotes = await readFile(
-    path.join(siteRoot, 'src/content/docs', releaseNotes),
-    'utf8',
-  );
-  assert.match(
-    renderedReleaseNotes,
-    /^pagefind: false$/m,
-    `${releaseNotes} must stay out of default search`,
-  );
+  await assertArchivePagesExcluded(siteRoot, manifest.pages);
 
   const [afterRevision, afterStatus] = await Promise.all([
     execFileAsync('git', ['--no-optional-locks', '-C', canonicalSourceRoot, 'rev-parse', 'HEAD']),

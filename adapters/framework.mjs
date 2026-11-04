@@ -540,7 +540,7 @@ function requirementCard(requirement, index, pageRoutes, base) {
 
 function functionalityMarkup(frontmatter, pageRoutes, base) {
   const requirements = frontmatter.requirements ?? [];
-  if (!requirements.length) return '';
+  if (!requirements.length) return undefined;
   const facts = [];
   if (frontmatter.realises?.length) facts.push(['Capabilities', frontmatter.realises.join(', ')]);
   if (frontmatter.conformance) facts.push(['Conformance', frontmatter.conformance]);
@@ -552,19 +552,20 @@ function functionalityMarkup(frontmatter, pageRoutes, base) {
   const cards = requirements
     .map((requirement, index) => requirementCard(requirement, index + 1, pageRoutes, base))
     .join('\n');
-  return `<div class="functionality-summary">
+  return {
+    summary: `<div class="functionality-summary">
   <p>${inlineHtml(frontmatter.description)}</p>
   ${factMarkup ? `<dl>${factMarkup}</dl>` : ''}
-</div>
-
-## Requirements
+</div>`,
+    requirements: `## Requirements
 
 <p class="requirements-introduction">This functionality defines ${requirements.length} authoring-draft requirement${requirements.length === 1 ? '' : 's'}. “Unnumbered draft” reflects the source metadata and does not invent a permanent requirement identifier.</p>
 
 <div class="requirements-list">
 ${cards}
 </div>
-`;
+`,
+  };
 }
 
 function markdownTableCell(value) {
@@ -690,7 +691,9 @@ function transformBody({ page, pageRoutes, pageAnchors, base, metadata, authors,
     body = `${[...page.compatibilityAnchors].map((id) => `<a id="${htmlEscape(id)}"></a>`).join('\n')}\n\n${body}`;
   }
   const functionality = functionalityMarkup(frontmatter, pageRoutes, base);
-  if (functionality) body = `${functionality}\n\n${body}`;
+  if (functionality) {
+    body = [functionality.summary, body, functionality.requirements].filter(Boolean).join('\n\n');
+  }
   if (sourceName === 'README.md') body = `${homeMetadataMarkup(metadata, authors)}\n\n${body}`;
   const isArchive = sourceName.startsWith('resources/history/') || sourceName.includes('/legacy/');
   if (isArchive) {
