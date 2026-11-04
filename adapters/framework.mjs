@@ -65,9 +65,9 @@ function baseUrl(base, relative = '') {
   return relative ? `${normalized}${relative}` : normalized;
 }
 
-function safeRelativeTarget(sourceName, target) {
+function safeRelativeTarget(sourceName, target, directory = path.posix.dirname(sourceName)) {
   const pathname = target.split(/[?#]/, 1)[0];
-  const normalized = path.posix.normalize(path.posix.join(path.posix.dirname(sourceName), pathname));
+  const normalized = path.posix.normalize(path.posix.join(directory, pathname));
   if (path.posix.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) {
     throw new Error(`${sourceName}: relative reference escapes the source root: ${target}`);
   }
@@ -214,16 +214,6 @@ function standaloneAnchors(tree) {
   return anchors;
 }
 
-async function exists(file) {
-  try {
-    await stat(file);
-    return true;
-  } catch (error) {
-    if (error.code === 'ENOENT') return false;
-    throw error;
-  }
-}
-
 function pageLabel(sourceName, frontmatter, headings) {
   if (typeof frontmatter.title === 'string' && frontmatter.title.trim()) return frontmatter.title.trim();
   const h1 = headings.find((heading) => heading.depth === 1);
@@ -234,7 +224,7 @@ function pageLabel(sourceName, frontmatter, headings) {
 function localReferences(tree) {
   const references = [];
   visit(tree, (node) => {
-    if ((node.type === 'link' || node.type === 'image') && typeof node.url === 'string') {
+    if (['link', 'image', 'definition'].includes(node.type) && typeof node.url === 'string') {
       references.push(node.url);
     }
     if (node.type === 'html') {
@@ -244,28 +234,12 @@ function localReferences(tree) {
   return references;
 }
 
-async function discoverPages(sourceRoot, toc) {
+function discoverPages(toc) {
   const ordered = ['README.md'];
   for (const [section, entries] of Object.entries(toc)) {
     ordered.push(...entries.map((entry) => path.posix.join(section, entry)));
   }
-  const pages = new Set(ordered);
-  const queue = [...ordered];
-  while (queue.length) {
-    const sourceName = queue.shift();
-    const source = await readFile(path.join(sourceRoot, sourceName), 'utf8');
-    const tree = parser.parse(source);
-    for (const reference of localReferences(tree)) {
-      if (/^[A-Za-z][A-Za-z+.-]*:/.test(reference) || reference.startsWith('//') || reference.startsWith('#')) continue;
-      const target = safeRelativeTarget(sourceName, reference);
-      if (!target.endsWith('.md') || pages.has(target)) continue;
-      if (await exists(path.join(sourceRoot, target))) {
-        pages.add(target);
-        queue.push(target);
-      }
-    }
-  }
-  return { ordered: [...ordered, ...[...pages].filter((page) => !ordered.includes(page)).sort()], pages };
+  return { ordered, pages: new Set(ordered) };
 }
 
 function splitReference(url) {
@@ -280,7 +254,15 @@ function splitReference(url) {
   };
 }
 
-function collectReferencedSupportPaths(pages) {
+function decodedPathname(sourceName, pathname) {
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    throw new Error(`${sourceName}: invalid percent-encoding in reference: ${pathname}`);
+  }
+}
+
+function collectReferencedSupportPaths(pages, pageSources) {
   const references = new Set();
   for (const page of pages) {
     for (const reference of localReferences(page.tree)) {
@@ -293,7 +275,46 @@ function collectReferencedSupportPaths(pages) {
         continue;
       }
       const { pathname } = splitReference(reference);
-      if (pathname) references.add(safeRelativeTarget(page.sourceName, pathname));
+      if (!pathname) continue;
+      const target = safeRelativeTarget(
+        page.sourceName,
+        decodedPathname(page.sourceName, pathname),
+      );
+      if (target.endsWith('.md')) {
+        if (!pageSources.has(target)) {
+          throw new Error(
+            `${page.sourceName}: local Markdown page ${target} is not listed in toc.yml; add it to toc.yml or link to its repository URL`,
+          );
+        }
+        continue;
+      }
+      const directory = target.replace(/\/+$/, '');
+      if ([...pageSources].some((source) => source.startsWith(`${directory}/`))) continue;
+      references.add(target);
+    }
+    for (const requirement of page.frontmatter.requirements ?? []) {
+      for (const [field, value] of [
+        ['contract', requirement?.contract],
+        ['test', requirement?.test],
+      ]) {
+        if (typeof value !== 'string' || /^[A-Za-z][A-Za-z+.-]*:/.test(value) || value.startsWith('//')) continue;
+        const { pathname } = splitReference(value);
+        if (!pathname) continue;
+        const target = safeRelativeTarget(
+          page.sourceName,
+          decodedPathname(page.sourceName, pathname),
+          '.',
+        );
+        if (target.endsWith('.md')) {
+          if (!pageSources.has(target)) {
+            throw new Error(
+              `${page.sourceName}: requirement ${field} Markdown page ${target} is not listed in toc.yml`,
+            );
+          }
+          continue;
+        }
+        references.add(target);
+      }
     }
   }
   return references;
@@ -684,27 +705,15 @@ function transformBody({ page, pageRoutes, pageAnchors, base, metadata, authors,
   return `${generatedFrontmatter({ title, description, pagefind: isArchive ? false : undefined }, unofficial)}${body}`;
 }
 
-function sidebarFromToc(toc, pagesBySource, ordered) {
+function sidebarFromToc(toc, pagesBySource) {
   const sidebar = [{ label: 'Home', slug: '' }];
-  const tocSources = new Set(['README.md']);
   for (const [section, entries] of Object.entries(toc)) {
     const items = entries.map((entry) => {
       const source = path.posix.join(section, entry);
-      tocSources.add(source);
       const page = pagesBySource.get(source);
       return { label: page.title, slug: page.route };
     });
     sidebar.push({ label: section[0].toUpperCase() + section.slice(1), items });
-  }
-  const extras = ordered.filter((source) => !tocSources.has(source));
-  if (extras.length) {
-    sidebar.push({
-      label: 'Linked documents',
-      items: extras.map((source) => ({
-        label: pagesBySource.get(source).title,
-        slug: pagesBySource.get(source).route,
-      })),
-    });
   }
   return sidebar;
 }
@@ -736,12 +745,116 @@ async function gitSourceState(sourceRoot) {
   return { sourceRevision: revision.trim(), sourceDirty: statusOutput.trim() !== '' };
 }
 
-async function copySupportFiles(sourceRoot, siteRoot, pageSources, snapshots, referencedPaths) {
-  const copied = [];
+const SPECIFICATION_DOWNLOADS = ['toc.yml', 'metadata.yml', 'authors.yml'];
+const STRUCTURED_SUPPORT_EXTENSIONS = new Set(['.yml', '.yaml', '.json']);
+
+function schemaReferences(value, found = []) {
+  if (Array.isArray(value)) {
+    for (const item of value) schemaReferences(item, found);
+  } else if (value && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      if (['$ref', '$dynamicRef'].includes(key) && typeof child === 'string') found.push(child);
+      else schemaReferences(child, found);
+    }
+  }
+  return found;
+}
+
+function parseSchemaReferences(relative, contents) {
+  if (!STRUCTURED_SUPPORT_EXTENSIONS.has(path.posix.extname(relative).toLowerCase())) return [];
+  const text = contents.toString('utf8');
+  if (!text.includes('$ref') && !text.includes('$dynamicRef')) return [];
+  const options = { logLevel: 'error' };
+  const documents = YAML.parseAllDocuments(text, options);
+  const failure = documents.flatMap((document) => document.errors)[0];
+  if (failure) throw failure;
+  return documents.flatMap((document) => schemaReferences(document.toJS(options)));
+}
+
+function relativeSchemaTargets(relative, references) {
+  const targets = [];
+  for (const reference of references) {
+    if (
+      /^[A-Za-z][A-Za-z+.-]*:/.test(reference)
+      || reference.startsWith('//')
+      || reference.startsWith('/')
+    ) {
+      continue;
+    }
+    const { pathname } = splitReference(reference);
+    if (pathname) {
+      targets.push(safeRelativeTarget(relative, decodedPathname(relative, pathname)));
+    }
+  }
+  return targets;
+}
+
+async function copySupportFiles(
+  sourceRoot,
+  siteRoot,
+  pageSources,
+  snapshots,
+  referencedPaths,
+  warnings,
+) {
+  const copied = new Set();
   const publicRoot = path.join(siteRoot, 'public');
   const sourceReal = await realpath(sourceRoot);
+  const pending = [];
+  const followed = new Set();
+  const walking = new Set();
 
-  async function walk(source, relative) {
+  async function publish(relative, contents, real, via, chain) {
+    const posixRelative = relative.split(path.sep).join('/');
+    if (copied.has(posixRelative)) return;
+    const destination = path.join(publicRoot, relative);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, contents);
+    snapshots.set(posixRelative, contents);
+    copied.add(posixRelative);
+
+    const followKey = `${real}\0${path.posix.dirname(posixRelative)}`;
+    if (followed.has(followKey)) return;
+    followed.add(followKey);
+    const chainKey = `${real}\0${path.dirname(real)}`;
+    if (chain.has(chainKey)) {
+      warnings.push(`${posixRelative}: symlink cycle, schema references are not followed`);
+      return;
+    }
+    let references;
+    try {
+      references = parseSchemaReferences(posixRelative, contents);
+    } catch (error) {
+      const message = `${posixRelative}: cannot parse support file to follow schema references: ${error.message}`;
+      if (via) throw new Error(`${message} (referenced from ${via})`);
+      warnings.push(message);
+      return;
+    }
+    for (const target of relativeSchemaTargets(posixRelative, references)) {
+      pending.push({
+        relative: target,
+        from: posixRelative,
+        chain: new Set(chain).add(chainKey),
+      });
+    }
+  }
+
+  async function walkDirectory(real, source, relative, via, chain) {
+    if (walking.has(real)) {
+      warnings.push(`${relative.split(path.sep).join('/')}: symlink cycle, directory is already being copied`);
+      return;
+    }
+    walking.add(real);
+    try {
+      for (const entry of await readdir(source)) {
+        await walk(path.join(source, entry), path.join(relative, entry), via, chain);
+      }
+    } finally {
+      walking.delete(real);
+    }
+  }
+
+  async function walk(source, relative, via, chain) {
     const posixRelative = relative.split(path.sep).join('/');
     if (!isPublishableSupportPath(posixRelative)) return;
     const details = await lstat(source);
@@ -761,38 +874,58 @@ async function copySupportFiles(sourceRoot, siteRoot, pageSources, snapshots, re
       }
       const resolvedDetails = await stat(resolved);
       if (resolvedDetails.isDirectory()) {
-        for (const entry of await readdir(resolved)) {
-          await walk(path.join(resolved, entry), path.join(relative, entry));
-        }
-      } else {
-        const contents = await readFile(resolved);
-        const destination = path.join(publicRoot, relative);
-        await mkdir(path.dirname(destination), { recursive: true });
-        await writeFile(destination, contents);
-        snapshots.set(relative.split(path.sep).join('/'), contents);
-        copied.push(relative.split(path.sep).join('/'));
+        await walkDirectory(resolved, resolved, relative, via, chain);
+      } else if (!posixRelative.endsWith('.md') && !pageSources.has(posixRelative)) {
+        await publish(relative, await readFile(resolved), resolved, via, chain);
       }
       return;
     }
     if (details.isDirectory()) {
-      for (const entry of await readdir(source)) {
-        await walk(path.join(source, entry), path.join(relative, entry));
-      }
+      await walkDirectory(await realpath(source), source, relative, via, chain);
       return;
     }
     if (posixRelative.endsWith('.md') || pageSources.has(posixRelative)) return;
-    const contents = await readFile(source);
-    const destination = path.join(publicRoot, relative);
-    await mkdir(path.dirname(destination), { recursive: true });
-    await writeFile(destination, contents);
-    snapshots.set(posixRelative, contents);
-    copied.push(posixRelative);
+    await publish(relative, await readFile(source), await realpath(source), via, chain);
   }
 
-  for (const entry of await readdir(sourceRoot)) {
-    await walk(path.join(sourceRoot, entry), entry);
+  async function copyEntry({ relative, from, chain = new Set() }) {
+    const normalized = relative.replace(/\/+$/, '');
+    if (!isPublishableSupportPath(normalized)) {
+      throw new Error(
+        `${from ? `${from}: ` : ''}Refusing referenced hidden operational/config path: ${normalized}`,
+      );
+    }
+    const source = path.join(sourceRoot, normalized);
+    let resolved;
+    try {
+      resolved = await realpath(source);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      if (from) {
+        throw new Error(`${from}: schema reference target ${normalized} does not exist`);
+      }
+      return;
+    }
+    if (resolved !== sourceReal && !resolved.startsWith(`${sourceReal}${path.sep}`)) {
+      throw new Error(`Refusing source symlink outside repository: ${normalized}`);
+    }
+    const resolvedRelative = path.relative(sourceReal, resolved).split(path.sep).join('/');
+    if (!isPublishableSupportPath(resolvedRelative)) {
+      throw new Error(
+        `Refusing referenced support symlink ${normalized}: target is hidden operational/config path ${resolvedRelative}`,
+      );
+    }
+    if (from && (await stat(resolved)).isDirectory()) {
+      throw new Error(`${from}: schema reference target ${normalized} is a directory`);
+    }
+    await walk(source, normalized, from, chain);
   }
-  return copied.toSorted();
+
+  for (const reference of [...new Set([...SPECIFICATION_DOWNLOADS, ...referencedPaths])].sort()) {
+    pending.push({ relative: reference });
+  }
+  while (pending.length) await copyEntry(pending.shift());
+  return [...copied].toSorted();
 }
 
 function redirectHtml(target, unofficial) {
@@ -821,6 +954,7 @@ async function writeSupportDirectoryIndexes(
   pageRoutes,
   base,
   referencedPaths,
+  supportFiles,
   unofficial,
 ) {
   const indexes = [];
@@ -860,50 +994,13 @@ async function writeSupportDirectoryIndexes(
     }
   }
   for (const directory of [...directories].sort()) {
-    const sourceDirectory = path.join(sourceRoot, directory);
-    const directoryDetails = await lstat(sourceDirectory);
-    if (directoryDetails.isSymbolicLink()) {
-      const resolved = await realpath(sourceDirectory);
-      if (resolved !== sourceReal && !resolved.startsWith(`${sourceReal}${path.sep}`)) {
-        throw new Error(`Refusing source symlink outside repository: ${directory}`);
-      }
-      const resolvedRelative = path.relative(sourceReal, resolved).split(path.sep).join('/');
-      if (!isPublishableSupportPath(resolvedRelative)) {
-        if (referencedSupportPathIncludes(directory, referencedPaths)) {
-          throw new Error(
-            `Refusing referenced support symlink ${directory}: target is hidden operational/config path ${resolvedRelative}`,
-          );
-        }
-        continue;
-      }
-    }
-    const entries = await readdir(sourceDirectory, { withFileTypes: true });
-    const links = [];
-    for (const entry of entries) {
-      const logical = `${directory}/${entry.name}`;
-      if (!isPublishableSupportPath(logical)) continue;
-      let isDirectory = entry.isDirectory();
-      if (entry.isSymbolicLink()) {
-        const resolved = await realpath(path.join(sourceRoot, logical));
-        if (resolved !== sourceReal && !resolved.startsWith(`${sourceReal}${path.sep}`)) {
-          throw new Error(`Refusing source symlink outside repository: ${logical}`);
-        }
-        const resolvedRelative = path.relative(sourceReal, resolved).split(path.sep).join('/');
-        if (!isPublishableSupportPath(resolvedRelative)) {
-          if (referencedSupportPathIncludes(logical, referencedPaths)) {
-            throw new Error(
-              `Refusing referenced support symlink ${logical}: target is hidden operational/config path ${resolvedRelative}`,
-            );
-          }
-          continue;
-        }
-        isDirectory = (await stat(resolved)).isDirectory();
-      }
-      const relative = `${logical}${isDirectory ? '/' : ''}`;
-      links.push(
-        `<li><a href="${htmlEscape(baseUrl(base, relative))}">${htmlEscape(entry.name)}${isDirectory ? '/' : ''}</a></li>`,
-      );
-    }
+    const prefix = `${directory}/`;
+    const links = supportFiles
+      .filter((relative) => relative.startsWith(prefix))
+      .map((relative) => {
+        const label = relative.slice(prefix.length);
+        return `<li><a href="${htmlEscape(baseUrl(base, relative))}">${htmlEscape(label)}</a></li>`;
+      });
     const output = path.join(siteRoot, 'public', directory, 'index.html');
     await mkdir(path.dirname(output), { recursive: true });
     await writeFile(
@@ -978,7 +1075,7 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
   }
   if (!Array.isArray(authors?.authors)) throw new Error('authors.yml: authors list is required');
 
-  const { ordered, pages: pageSources } = await discoverPages(absoluteSourceRoot, toc);
+  const { ordered, pages: pageSources } = discoverPages(toc);
   const warnings = [];
   const loaded = [];
   const snapshots = new Map([
@@ -1016,7 +1113,7 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
   addArchiveCompatibilityAnchors(loaded, warnings);
   const pageRoutes = new Map(loaded.map((page) => [page.sourceName, page.route]));
   const pageAnchors = new Map(loaded.map((page) => [page.sourceName, page.anchors]));
-  const referencedSupportPaths = collectReferencedSupportPaths(loaded);
+  const referencedSupportPaths = collectReferencedSupportPaths(loaded, pageSources);
   assertReferencedSupportPathsAllowed(referencedSupportPaths);
   const supportFiles = await copySupportFiles(
     absoluteSourceRoot,
@@ -1024,6 +1121,7 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
     pageSources,
     snapshots,
     referencedSupportPaths,
+    warnings,
   );
   const apiReferences = await prepareApiReferences({
     sourceRoot: absoluteSourceRoot,
@@ -1039,7 +1137,7 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
     reference.title = page.title;
     reference.route = page.route;
   }
-  const sidebar = apiReferenceSidebar(sidebarFromToc(toc, pagesBySource, ordered), apiReferences.references, pagesBySource);
+  const sidebar = apiReferenceSidebar(sidebarFromToc(toc, pagesBySource), apiReferences.references, pagesBySource);
 
   await pruneFormerGeneratedPages(absoluteSiteRoot, loaded);
 
@@ -1072,6 +1170,7 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
     pageRoutes,
     normalizedBase,
     referencedSupportPaths,
+    supportFiles,
     unofficial,
   );
   const redirects = await writeRedirects(absoluteSiteRoot, loaded, normalizedBase, unofficial);
@@ -1085,7 +1184,7 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
     sourceDigest: sourceDigest(snapshots),
     requirementCount,
     sidebar,
-    supportFiles: [...supportFiles, ...apiReferences.supportFiles],
+    supportFiles: [...new Set([...supportFiles, ...apiReferences.supportFiles])].toSorted(),
     apiReferences: apiReferences.references,
     supportIndexes,
     redirects,

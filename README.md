@@ -144,8 +144,9 @@ select them. A local checkout works through `GOVSTACK_SITE_RENDERER` meanwhile.
 
 - `adapters/api-guide.mjs` reads the existing `SUMMARY.md`, Markdown,
   `rules.yaml`, and linter coverage contract without reclassifying its rules.
-- `adapters/framework.mjs` reads `metadata.yml`, `authors.yml`, `toc.yml`,
-  functionality frontmatter, and the declared linked/support material.
+- `adapters/framework.mjs` treats root `README.md` and the pages listed in
+  `toc.yml` as the complete page inventory, then reads functionality frontmatter
+  and explicitly referenced support material.
 - `src/` owns the shared presentation. It contains no hand-maintained copies
   of either publication's prose or requirements.
 - `scripts/publication.mjs` normalizes adapter output into a common manifest.
@@ -161,19 +162,32 @@ output, including outputs on another volume. Promotion preserves unrelated files
 and refuses symlink destinations or obsolete HTML routes. Use a fresh output
 directory when a publication intentionally removes a route.
 
-The runtime content loader uses the manifest page allowlist. Supporting HTML and
-redirects must also be declared explicitly. Generated directories are ignored;
-change the input or generator rather than editing generated content.
+The runtime content loader uses the manifest page allowlist. For framework
+sources, a relative Markdown link must target root `README.md` or a page listed
+in `toc.yml`; generation fails instead of silently adding another page.
+Supporting HTML and redirects must also be declared explicitly. Generated
+directories are ignored; change the input or generator rather than editing
+generated content.
 Starlight's Markdown processing includes the generated content directory, so
 native heading permalinks and asides use the same transforms as ordinary docs.
 
-Framework support files exclude hidden operational/configuration paths, including
-environment files. `.well-known` publication assets and `.github` references stay
-available. References or symlink aliases to excluded paths fail generation.
-Static checks and output promotion also reject excluded paths, including files
-left in an older output directory. Choose a fresh output rather than deleting
-unrelated files. The adapter still copies other allowed non-Markdown files;
-limiting those to an explicit reference/dependency graph is separate work.
+Framework support files come from an explicit publication graph: page links,
+images and reference definitions; raw HTML `href` and `src` attributes;
+functionality `contract` and `test` values; and the source metadata downloads
+`toc.yml`, `metadata.yml`, and `authors.yml`. A linked directory publishes its
+allowed non-Markdown tree. Referenced YAML and JSON files add their local
+`$ref` and `$dynamicRef` dependency closure. An `api-references.yml` contract
+independently publishes its original source and local dependency closure as well
+as the generated bundle; the configuration file itself is not a download.
+Unreferenced repository files, including lockfiles and tooling, are not
+published.
+
+Hidden operational/configuration paths, including environment files, remain
+excluded. Explicit `.well-known` publication assets and `.github` references
+can be published. References or symlink aliases to excluded paths fail
+generation. Static checks and output promotion also reject excluded paths,
+including files left in an older output directory. Choose a fresh output rather
+than deleting unrelated files.
 
 ## Adapter boundary
 

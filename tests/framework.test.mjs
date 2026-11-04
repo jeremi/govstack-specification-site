@@ -29,6 +29,7 @@ async function fixture() {
     - service.md
   resources:
     - testing.md
+    - linked.md
 `);
   await write(sourceRoot, 'metadata.yml', `name: Digital Registries
 abstract: A fixture Registry specification.
@@ -138,7 +139,11 @@ Run the fixture.
 Supporting text.
 `);
   await write(sourceRoot, 'assets/diagram.svg', '<svg xmlns="http://www.w3.org/2000/svg"><title>Diagram</title></svg>\n');
-  await write(sourceRoot, 'api/openapi.yaml', 'openapi: 3.1.0\n');
+  await write(
+    sourceRoot,
+    'api/openapi.yaml',
+    'openapi: 3.1.0\ncomponents:\n  schemas:\n    Common:\n      $ref: common/govstack-openapi-common.yaml#/components\n',
+  );
   await write(sourceRoot, 'api/extensions/example.schema.json', '{"type":"object"}\n');
   await write(sourceRoot, 'api/common/govstack-openapi-common.yaml', 'components: {}\n');
   await mkdir(path.join(sourceRoot, 'resources'), { recursive: true });
@@ -187,6 +192,117 @@ test('support path policy allows public compatibility paths and rejects hidden c
   }
 });
 
+test('a local Markdown link outside toc.yml is rejected instead of becoming a page', async () => {
+  const { sourceRoot, siteRoot } = await fixture();
+  await write(sourceRoot, 'resources/unlisted.md', '# Unlisted\n');
+  const readmePath = path.join(sourceRoot, 'README.md');
+  await writeFile(
+    readmePath,
+    `${await readFile(readmePath, 'utf8')}\n[Unlisted page](resources/unlisted.md).\n`,
+  );
+
+  await assert.rejects(
+    generateSite({ sourceRoot, siteRoot, base: '/' }),
+    /README\.md: local Markdown page resources\/unlisted\.md is not listed in toc\.yml/i,
+  );
+});
+
+test('unreferenced repository files are not published as support downloads', async () => {
+  const { sourceRoot, siteRoot } = await fixture();
+  await write(sourceRoot, 'package-lock.json', '{"lockfileVersion":3}\n');
+  await write(sourceRoot, 'tools/validate.py', 'print("fixture")\n');
+  await write(sourceRoot, 'api/unreferenced.json', '{"type":"object"}\n');
+
+  const manifest = await generateSite({ sourceRoot, siteRoot, base: '/' });
+
+  for (const relative of ['package-lock.json', 'tools/validate.py', 'api/unreferenced.json']) {
+    assert.equal(manifest.supportFiles.includes(relative), false, `${relative} must not be published`);
+    await assert.rejects(readFile(path.join(siteRoot, 'public', relative)), { code: 'ENOENT' });
+  }
+});
+
+test('page-linked structured files publish their local ref and dynamicRef dependencies', async () => {
+  const { sourceRoot, siteRoot } = await fixture();
+  const readmePath = path.join(sourceRoot, 'README.md');
+  await writeFile(
+    readmePath,
+    `${await readFile(readmePath, 'utf8')}\n[Contract](contracts/root.yaml).\n`,
+  );
+  await write(
+    sourceRoot,
+    'contracts/root.yaml',
+    "ordinary:\n  $ref: schemas/ordinary.json#/$defs/value\ndynamic:\n  $dynamicRef: schemas/dynamic.json#value\n",
+  );
+  await write(sourceRoot, 'contracts/schemas/ordinary.json', '{"$defs":{"value":{"type":"string"}}}\n');
+  await write(sourceRoot, 'contracts/schemas/dynamic.json', '{"$dynamicAnchor":"value","type":"string"}\n');
+
+  const manifest = await generateSite({ sourceRoot, siteRoot, base: '/' });
+
+  for (const relative of [
+    'contracts/root.yaml',
+    'contracts/schemas/ordinary.json',
+    'contracts/schemas/dynamic.json',
+  ]) {
+    assert.equal(manifest.supportFiles.includes(relative), true, `${relative} must be published`);
+    assert.equal(
+      (await readFile(path.join(siteRoot, 'public', relative))).compare(
+        await readFile(path.join(sourceRoot, relative)),
+      ),
+      0,
+      `${relative} bytes must be preserved`,
+    );
+  }
+});
+
+for (const keyword of ['$ref', '$dynamicRef']) {
+  test(`a missing local ${keyword} target fails generation`, async () => {
+    const { sourceRoot, siteRoot } = await fixture();
+    const readmePath = path.join(sourceRoot, 'README.md');
+    await writeFile(
+      readmePath,
+      `${await readFile(readmePath, 'utf8')}\n[Contract](contracts/root.json).\n`,
+    );
+    await write(sourceRoot, 'contracts/root.json', JSON.stringify({ [keyword]: 'missing.json' }));
+
+    await assert.rejects(
+      generateSite({ sourceRoot, siteRoot, base: '/' }),
+      /contracts\/root\.json: schema reference target contracts\/missing\.json does not exist/i,
+    );
+  });
+}
+
+test('a local schema reference to a directory fails generation', async () => {
+  const { sourceRoot, siteRoot } = await fixture();
+  const readmePath = path.join(sourceRoot, 'README.md');
+  await writeFile(
+    readmePath,
+    `${await readFile(readmePath, 'utf8')}\n[Contract](contracts/root.json).\n`,
+  );
+  await write(sourceRoot, 'contracts/root.json', '{"$ref":"schemas/"}\n');
+  await write(sourceRoot, 'contracts/schemas/value.json', '{"type":"string"}\n');
+
+  await assert.rejects(
+    generateSite({ sourceRoot, siteRoot, base: '/' }),
+    /contracts\/root\.json: schema reference target contracts\/schemas is a directory/i,
+  );
+});
+
+test('a support directory index lists only files that were published', async () => {
+  const { sourceRoot, siteRoot } = await fixture();
+  await write(sourceRoot, 'api/extensions/private-notes.md', '# Private notes\n');
+
+  const manifest = await generateSite({ sourceRoot, siteRoot, base: '/docs/' });
+  const index = await readFile(path.join(siteRoot, 'public/api/extensions/index.html'), 'utf8');
+
+  assert.match(index, /example\.schema\.json/);
+  assert.doesNotMatch(index, /private-notes\.md/);
+  assert.equal(manifest.supportFiles.includes('api/extensions/private-notes.md'), false);
+  await assert.rejects(
+    readFile(path.join(siteRoot, 'public/api/extensions/private-notes.md')),
+    { code: 'ENOENT' },
+  );
+});
+
 test('generator rewrites routes, renders requirement semantics, copies aliases, and records provenance', async () => {
   const { sourceRoot, siteRoot } = await fixture();
   const manifest = await generateSite({ sourceRoot, siteRoot, base: '/' });
@@ -197,6 +313,7 @@ test('generator rewrites routes, renders requirement semantics, copies aliases, 
   assert.match(manifest.sourceRevision, /^[0-9a-f]{40}$/);
   assert.match(manifest.sourceDigest, /^sha256:[0-9a-f]{64}$/);
   assert.deepEqual(manifest.sidebar[0], { label: 'Home', slug: '' });
+  assert.equal(manifest.sidebar.some(({ label }) => label === 'Linked documents'), false);
 
   const home = await readFile(path.join(siteRoot, 'src/content/docs/index.md'), 'utf8');
   assert.match(home, /\[Linked document\]\(\/resources\/linked\/#linked-heading\)/);
@@ -227,7 +344,10 @@ test('generator rewrites routes, renders requirement semantics, copies aliases, 
   assert.match(requirements, /href="\/resources\/api\.yml"/);
 
   assert.equal((await lstat(path.join(siteRoot, 'public/resources/api.yml'))).isSymbolicLink(), false);
-  assert.equal(await readFile(path.join(siteRoot, 'public/resources/api.yml'), 'utf8'), 'openapi: 3.1.0\n');
+  assert.match(
+    await readFile(path.join(siteRoot, 'public/resources/api.yml'), 'utf8'),
+    /\$ref: common\/govstack-openapi-common\.yaml/,
+  );
   assert.equal(
     await readFile(path.join(siteRoot, 'public/resources/common/govstack-openapi-common.yaml'), 'utf8'),
     'components: {}\n',
@@ -384,7 +504,7 @@ test('support files omit hidden operational config without changing source bytes
     'utf8',
   );
   assert.match(extensionIndex, /extra\.schema\.json/);
-  assert.match(extensionIndex, />\.well-known\/<\/a>/);
+  assert.match(extensionIndex, />\.well-known\/catalog\.json<\/a>/);
   assert.doesNotMatch(extensionIndex, /\.env|\.npmrc|\.secrets/);
 
   for (const [relative, contents] of before) {
@@ -488,14 +608,16 @@ test('canonical source integration renders its requirements without changing sou
   assert.match(requirements, /Any of/);
   assert.match(requirements, /Minimum selections/);
 
-  for (const archive of [
-    'resources/history/release-notes.md',
-    'resources/history/requirements.md',
-    'api/legacy/generated-crud.md',
-  ]) {
-    const renderedArchive = await readFile(path.join(siteRoot, 'src/content/docs', archive), 'utf8');
-    assert.match(renderedArchive, /^pagefind: false$/m, `${archive} must stay out of default search`);
-  }
+  const releaseNotes = 'resources/history/release-notes.md';
+  const renderedReleaseNotes = await readFile(
+    path.join(siteRoot, 'src/content/docs', releaseNotes),
+    'utf8',
+  );
+  assert.match(
+    renderedReleaseNotes,
+    /^pagefind: false$/m,
+    `${releaseNotes} must stay out of default search`,
+  );
 
   const [afterRevision, afterStatus] = await Promise.all([
     execFileAsync('git', ['--no-optional-locks', '-C', canonicalSourceRoot, 'rev-parse', 'HEAD']),

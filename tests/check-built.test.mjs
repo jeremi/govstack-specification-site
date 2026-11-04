@@ -88,7 +88,20 @@ test('checks declared pages, anchors, support output, base paths, and Pagefind',
   );
   assert.deepEqual(result.errors, []);
   assert.equal(result.pages, 2);
-  assert.equal(result.links, 4);
+  assert.equal(result.links, 5);
+});
+
+test('checks links emitted by support directory indexes', async (t) => {
+  const options = await builtFixture(t, { base: '/standards/example/' });
+  await write(
+    options.distDir,
+    'resources/index.html',
+    `${draftHead}<h1>Resources</h1><a href="/standards/example/resources/missing.md">Missing</a></body></html>`,
+  );
+
+  const errors = (await checkBuilt(options)).errors.join('\n');
+
+  assert.match(errors, /resources\/index\.html: missing local target.*missing\.md/i);
 });
 
 test('API reference verification requires a native host, closed metadata and the exact bundled contract', async (t) => {
