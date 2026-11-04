@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
+import YAML from 'yaml';
 
 import { generateSite, routeFor } from '../adapters/framework.mjs';
 import { isPublishableSupportPath } from '../scripts/support-paths.mjs';
@@ -161,6 +162,8 @@ test('routeFor creates Starlight routes for home, nested READMEs, and ordinary p
   assert.equal(routeFor('resources/README.md'), 'resources');
   assert.equal(routeFor('requirements/service.md'), 'requirements/service');
   assert.equal(routeFor('resources/migration-from-3.0.md'), 'resources/migration-from-30');
+  assert.equal(routeFor('api/examples/publicschema/PROVENANCE.md'), 'api/examples/publicschema/provenance');
+  assert.equal(routeFor('resources/API Guide.md'), 'resources/api-guide');
 });
 
 test('support path policy allows public compatibility paths and rejects hidden config', () => {
@@ -440,7 +443,7 @@ test('generator rejects a referenced directory symlink to hidden operational con
   );
 });
 
-test('canonical source integration renders all 39 requirements without changing source state', async (t) => {
+test('canonical source integration renders its requirements without changing source state', async (t) => {
   if (!canonicalSourceRoot) return t.skip('GOVSTACK_FRAMEWORK_SOURCE_ROOT is not set');
   const siteRoot = await mkdtemp(path.join(os.tmpdir(), 'registries-canonical-site-'));
   const [beforeRevision, beforeStatus] = await Promise.all([
@@ -457,8 +460,18 @@ test('canonical source integration renders all 39 requirements without changing 
 
   const manifest = await generateSite({ sourceRoot: canonicalSourceRoot, siteRoot, base: '/' });
 
-  assert.equal(manifest.requirementCount, 39);
-  assert.equal(manifest.pages.length, 34);
+  const sourceRows = await Promise.all(manifest.pages.map(async (page) => {
+    const source = await readFile(path.join(canonicalSourceRoot, page.source), 'utf8');
+    const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(source);
+    return frontmatter ? YAML.parse(frontmatter[1])?.requirements ?? [] : [];
+  }));
+  const expectedRequirements = sourceRows.reduce((total, rows) => total + rows.length, 0);
+  assert.ok(expectedRequirements > 0);
+  assert.equal(manifest.requirementCount, expectedRequirements);
+  const toc = YAML.parse(await readFile(path.join(canonicalSourceRoot, 'toc.yml'), 'utf8')).toc;
+  for (const [section, entries] of Object.entries(toc)) {
+    for (const entry of entries) assert.ok(manifest.pages.some((page) => page.source === `${section}/${entry}`));
+  }
   assert.equal(manifest.sourceRevision, beforeRevision.stdout.trim());
   assert.equal(manifest.sourceDirty, beforeStatus.stdout.trim() !== '');
   assert.equal(manifest.pages.some((page) => page.route === 'requirements/registry-services'), true);
@@ -466,9 +479,12 @@ test('canonical source integration renders all 39 requirements without changing 
     path.join(siteRoot, 'src/content/docs/requirements/registry-services.md'),
     'utf8',
   );
-  assert.equal((requirements.match(/<article class="requirement-card /g) ?? []).length, 35);
-  assert.equal((requirements.match(/class="requirement-card-title requirement-statement"/g) ?? []).length, 35);
-  assert.equal((requirements.match(/class="requirement-draft-id">Unnumbered draft/g) ?? []).length, 35);
+  const servicesSource = await readFile(path.join(canonicalSourceRoot, 'requirements/registry-services.md'), 'utf8');
+  const servicesRows = YAML.parse(/^---\r?\n([\s\S]*?)\r?\n---/.exec(servicesSource)[1]).requirements;
+  const unnumbered = servicesRows.filter((row) => row.id == null || row.id === '').length;
+  assert.equal((requirements.match(/<article class="requirement-card /g) ?? []).length, servicesRows.length);
+  assert.equal((requirements.match(/class="requirement-card-title requirement-statement"/g) ?? []).length, servicesRows.length);
+  assert.equal((requirements.match(/class="requirement-draft-id">Unnumbered draft/g) ?? []).length, unnumbered);
   assert.match(requirements, /Any of/);
   assert.match(requirements, /Minimum selections/);
 

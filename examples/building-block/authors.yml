@@ -1,0 +1,4 @@
+authors:
+  - name: Example author
+    roles: [Author]
+    urn: example:person:author

@@ -1,0 +1,10 @@
+---
+import PageTitle from '@astrojs/starlight/components/PageTitle.astro';
+import { readPublication } from '../../scripts/publication.mjs';
+
+const publication = readPublication();
+const route = Astro.locals.starlightRoute.entry.id;
+const isReference = publication.apiReferences?.some((reference: { route: string }) => reference.route === route);
+---
+
+{isReference ? <div class="api-reference-title"><PageTitle /></div> : <PageTitle />}

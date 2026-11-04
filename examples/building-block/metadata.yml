@@ -1,0 +1,12 @@
+name: Example Building Block
+abstract: An illustrative source fixture for the shared specification renderer.
+url: https://example.invalid/building-block/
+repository: https://example.invalid/building-block
+urn: example:spec:building-block
+owner_group: example:authors
+capabilities: []
+extensions: []
+versions:
+  - version: 0.0.0-example
+    short_description: Renderer illustration, not a specification release.
+    latest: true

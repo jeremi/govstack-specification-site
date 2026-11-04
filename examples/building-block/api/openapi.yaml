@@ -1,0 +1,31 @@
+openapi: 3.1.2
+info:
+  title: Entries API illustration
+  version: 0.0.0-example
+servers:
+  - url: https://api.example.invalid
+paths:
+  /v1/entries/{entryId}:
+    get:
+      tags: [Entries]
+      operationId: retrieveEntry
+      summary: Retrieve one entry
+      security: []
+      x-example-block:
+        purpose: Demonstrate block-specific technical metadata.
+      parameters:
+        - name: entryId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: One illustrative entry.
+          content:
+            application/json:
+              schema:
+                $ref: './entry.schema.json'
+              example:
+                entryId: example_1
+                label: Example entry

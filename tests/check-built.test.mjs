@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -88,6 +89,40 @@ test('checks declared pages, anchors, support output, base paths, and Pagefind',
   assert.deepEqual(result.errors, []);
   assert.equal(result.pages, 2);
   assert.equal(result.links, 4);
+});
+
+test('API reference verification requires a native host, closed metadata and the exact bundled contract', async (t) => {
+  const options = await builtFixture(t, { base: '/building-block/' });
+  const contract = '{"openapi":"3.1.2"}\n';
+  const reference = {
+    route: 'chapter', role: 'normative', contractUrl: '/building-block/api-reference/sample.json',
+    scriptUrl: '/building-block/api-reference/scalar.js',
+    bundleSha256: createHash('sha256').update(contract).digest('hex'),
+  };
+  options.manifest.apiReferences = [reference];
+  options.manifest.supportFiles.push('api-reference/sample.json', 'api-reference/scalar.js');
+  await write(options.distDir, 'api-reference/sample.json', contract);
+  await write(options.distDir, 'api-reference/scalar.js', '// fixture Scalar');
+  const file = path.join(options.distDir, 'chapter/index.html');
+  const original = await readFile(file, 'utf8');
+  const markup = `<section data-api-reference-role="normative"><details class="api-technical-metadata"><summary>Technical metadata</summary></details><div data-scalar-reference data-contract-url="${reference.contractUrl}" data-script-url="${reference.scriptUrl}"></div></section>`;
+  const page = original.replace('</body>', `${markup}</body>`);
+  await writeFile(file, page);
+  assert.deepEqual((await checkBuilt(options)).errors, []);
+  for (const [label, changed, expected] of [
+    ['missing host', original, /native Scalar host/i],
+    ['wrong contract', page.replace('data-contract-url="/building-block/', 'data-contract-url="/wrong/'), /contract URL/i],
+    ['expanded metadata', page.replace('<details class=', '<details open class='), /metadata.*collapsed/i],
+    ['wrong role', page.replace('data-api-reference-role="normative"', 'data-api-reference-role="example"'), /role/i],
+  ]) {
+    await t.test(label, async () => {
+      await writeFile(file, changed);
+      assert.match((await checkBuilt(options)).errors.join('\n'), expected);
+    });
+  }
+  await writeFile(file, page);
+  await write(options.distDir, 'api-reference/sample.json', '{"changed":true}');
+  assert.match((await checkBuilt(options)).errors.join('\n'), /bundle.*digest|digest.*bundle/i);
 });
 
 test('rejects hidden operational files even when the support manifest declares them', async (t) => {

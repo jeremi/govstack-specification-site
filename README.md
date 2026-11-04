@@ -18,6 +18,45 @@ Every profile requires an explicit source, either `--source` or the
 `DOCS_SOURCE_ROOT` environment variable. There is no default, so a build cannot
 silently pick up a different or dirty checkout.
 
+## OpenAPI references
+
+Framework sources can opt into Scalar references with `api-references.yml`:
+
+```yaml
+references:
+  - id: consultation
+    page: resources/api-reference.md
+    contract: api/openapi.yaml
+    role: normative
+  - id: birth-registration
+    page: resources/api-examples/birth-registration.md
+    contract: api/examples/birth-registration.openapi.yaml
+    role: example
+```
+
+Each `page` identifies a Markdown page in the source navigation. On these pages,
+the renderer replaces the prose with native Scalar, a short role label, download
+links, and closed technical metadata. There is no iframe or repeated introductory
+response. Examples stay inside the owning contract. A missing local dependency
+fails the build. An optional `operationId` and successful `response` pair can
+validate a published response example; `example` selects a named example for
+that pair. These selection fields are not needed to render a contract.
+
+`role` is explicit: `normative` labels a draft transport contract, while `example`
+labels an illustrative binding that adds no conformance requirements. Both the
+navigation and reference page retain that distinction. Response values remain
+illustrative even on a normative contract page.
+
+Scalar 1.76.4 and bundled contracts are served locally, including project-subpath
+deployments. Contract references must resolve inside the source repository;
+remote references and escaping symlinks are rejected. Source contract bytes stay
+unchanged and every dependency contributes to the source digest. API execution,
+AI chat, and telemetry are disabled; references follow the site's theme.
+Sources without this configuration retain their existing pages and navigation.
+Operation-level `x-*` metadata is collected for every Building Block, without
+requiring Digital Registries extensions. Built-output checks verify the native
+host, role label, collapsed metadata, and bundled contract digest.
+
 ## Local use
 
 Use Node 24.11 or later. From this directory:
@@ -86,13 +125,20 @@ skipped, with the reason printed, unless these variables are set:
   `GOVSTACK_SITE_RENDERER`.
 - Framework-format specifications call the CLI directly with
   `--profile framework --source <specification>`.
+- The template's `specification-site/` directory is a thin framework wrapper
+  that can be copied into a Building Block. It checks source-format and native
+  Scalar compatibility before running the shared renderer.
+- [`action.yml`](action.yml) provides a build-only composite GitHub Action.
+  See [Building Block integration](docs/building-block-integration.md) for local
+  setup, pinned CI consumption, and activation prerequisites.
 
 ## Not yet
 
-The repository is published at
-<https://github.com/jeremi/govstack-specification-site>, but there are no tagged
-releases and no version pinning yet. Until tags exist, consumers point
-`GOVSTACK_SITE_RENDERER` at a local checkout of this repository.
+The repository is available at
+<https://github.com/jeremi/govstack-specification-site>. Consumers can pin a
+published full commit; tagged releases are not required. The native Scalar
+integration and composite action must be published before hosted consumers can
+select them. A local checkout works through `GOVSTACK_SITE_RENDERER` meanwhile.
 
 ## Ownership and generated files
 

@@ -1,0 +1,75 @@
+---
+import MarkdownContent from '@astrojs/starlight/components/MarkdownContent.astro';
+import { readPublication } from '../../scripts/publication.mjs';
+
+const publication = readPublication();
+const route = Astro.locals.starlightRoute.entry.id;
+const isReference = publication.apiReferences?.some((reference: { route: string }) => reference.route === route);
+---
+
+{isReference ? <div class="native-reference-content"><slot /></div> : <MarkdownContent><slot /></MarkdownContent>}
+
+<script>
+  type ReferenceInstance = { destroy: () => void };
+  type ScalarWindow = Window & { Scalar?: { createApiReference: (element: HTMLElement, configuration: Record<string, unknown>) => ReferenceInstance } };
+  let scalarReady: Promise<void> | undefined;
+
+  function loadScalar(url: string) {
+    return scalarReady ??= new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = url;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Could not load Scalar'));
+      document.head.append(script);
+    });
+  }
+
+  async function mountReferences() {
+    for (const host of document.querySelectorAll<HTMLElement>('[data-scalar-reference]')) {
+      if (host.dataset.mounted) continue;
+      host.dataset.mounted = 'true';
+      try {
+        await loadScalar(host.dataset.scriptUrl!);
+        const scalar = (window as ScalarWindow).Scalar;
+        if (!scalar) throw new Error('Scalar is unavailable');
+        const root = document.documentElement;
+        let theme = root.dataset.theme;
+        const mount = () => scalar.createApiReference(host, {
+          url: host.dataset.contractUrl,
+          showSidebar: false,
+          hideSearch: true,
+          withDefaultFonts: false,
+          hideClientButton: true,
+          hideTestRequestButton: true,
+          showDeveloperTools: 'never',
+          telemetry: false,
+          persistAuth: false,
+          agent: { disabled: true },
+          showExtensions: [],
+          hideDarkModeToggle: true,
+          darkMode: theme === 'dark',
+          forceDarkModeState: theme === 'dark' ? 'dark' : 'light',
+        });
+        let reference = mount();
+        // Scalar resolves its color mode on mount; the URL retains the selected operation.
+        const observer = new MutationObserver(() => {
+          if (theme === root.dataset.theme) return;
+          theme = root.dataset.theme;
+          reference.destroy();
+          reference = mount();
+        });
+        observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+        window.addEventListener('pagehide', (event) => {
+          // Keep the mounted view when the browser caches this page for Back/Forward.
+          if (event.persisted) return;
+          observer.disconnect();
+          reference.destroy();
+        });
+      } catch (error) {
+        host.textContent = 'The API reference could not be loaded. Use the OpenAPI download above.';
+        console.error(error);
+      }
+    }
+  }
+  mountReferences();
+</script>
