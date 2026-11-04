@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -153,6 +154,28 @@ export async function checkBuilt({ distDir, manifest, base = '/' }) {
       continue;
     }
     const nodes = elements(parse(await readFile(file, 'utf8')));
+    const reference = manifest.apiReferences?.find((item) => item.route === page.route);
+    if (reference) {
+      const hosts = nodes.filter((node) => attribute(node, 'data-scalar-reference') !== undefined);
+      if (hosts.length !== 1) errors.push(`${page.source}: expected one native Scalar host`);
+      else {
+        if (attribute(hosts[0], 'data-contract-url') !== reference.contractUrl)
+          errors.push(`${page.source}: Scalar contract URL differs from the declared reference`);
+        if (attribute(hosts[0], 'data-script-url') !== reference.scriptUrl)
+          errors.push(`${page.source}: Scalar script URL differs from the declared reference`);
+      }
+      if (!nodes.some((node) => attribute(node, 'data-api-reference-role') === reference.role))
+        errors.push(`${page.source}: missing declared API reference role`);
+      const metadata = nodes.find((node) => node.tagName === 'details' && hasClass(node, 'api-technical-metadata'));
+      if (!metadata || attribute(metadata, 'open') !== undefined)
+        errors.push(`${page.source}: technical metadata must be present and collapsed`);
+      const prefix = basePath(base);
+      const relativeContract = reference.contractUrl?.startsWith(prefix) ? outputPath(reference.contractUrl.slice(prefix.length)) : undefined;
+      const contractFile = relativeContract && inside(distDir, relativeContract);
+      if (!contractFile || !(await isFile(contractFile))) errors.push(`${page.source}: missing local API reference bundle`);
+      else if (createHash('sha256').update(await readFile(contractFile)).digest('hex') !== reference.bundleSha256)
+        errors.push(`${page.source}: API reference bundle digest differs from the generated manifest`);
+    }
     const ids = nodes.map((node) => attribute(node, 'id')).filter(Boolean);
     const names = new Set(ids);
     if (names.size !== ids.length)

@@ -13,7 +13,7 @@ import {
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import GithubSlugger from 'github-slugger';
+import GithubSlugger, { slug } from 'github-slugger';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
@@ -23,6 +23,7 @@ import YAML from 'yaml';
 
 import { robotsContent } from '../scripts/publication.mjs';
 import { isPublishableSupportPath } from '../scripts/support-paths.mjs';
+import { apiReferenceMarkup, apiReferenceSidebar, prepareApiReferences } from '../scripts/api-references.mjs';
 
 const execFileAsync = promisify(execFile);
 const parser = unified().use(remarkParse).use(remarkGfm).use(remarkFrontmatter, ['yaml']);
@@ -48,7 +49,7 @@ export function routeFor(source) {
     : source.slice(0, -'.md'.length);
   return route
     .split('/')
-    .map((segment) => segment.replaceAll('.', ''))
+    .map((segment) => slug(segment))
     .join('/');
 }
 
@@ -621,11 +622,12 @@ ${authorRows}
 // Redirect and download index pages keep the bare noindex unless the build is unofficial.
 const supportRobots = (unofficial) => (unofficial ? robotsContent(true) : 'noindex');
 
-function generatedFrontmatter({ title, description, pagefind }, unofficial) {
+function generatedFrontmatter({ title, description, pagefind, apiReference }, unofficial) {
   return `---\n${YAML.stringify({
     title,
     description,
     ...(pagefind === false ? { pagefind: false } : {}),
+    ...(apiReference ? { tableOfContents: false, prev: false, next: false } : {}),
     head: [{ tag: 'meta', attrs: { name: 'robots', content: robotsContent(unofficial) } }],
   })}---\n\n`;
 }
@@ -678,7 +680,7 @@ function transformBody({ page, pageRoutes, pageAnchors, base, metadata, authors,
       ? frontmatter.description.trim()
       : sourceName === 'README.md'
         ? metadata.abstract
-        : `${title} in the Digital Registries specification.`;
+        : `${title} in the ${metadata.name} specification.`;
   return `${generatedFrontmatter({ title, description, pagefind: isArchive ? false : undefined }, unofficial)}${body}`;
 }
 
@@ -906,7 +908,7 @@ async function writeSupportDirectoryIndexes(
     await mkdir(path.dirname(output), { recursive: true });
     await writeFile(
       output,
-      `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="${supportRobots(unofficial)}"><title>${htmlEscape(directory)} downloads</title></head><body data-pagefind-ignore><main><h1>${htmlEscape(directory)} downloads</h1><p>Source support files for the local Digital Registries preview.</p><ul>${links.join('')}</ul></main></body></html>\n`,
+      `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="${supportRobots(unofficial)}"><title>${htmlEscape(directory)} downloads</title></head><body data-pagefind-ignore><main><h1>${htmlEscape(directory)} downloads</h1><p>Source support files for the specification preview.</p><ul>${links.join('')}</ul></main></body></html>\n`,
     );
     indexes.push(`${directory}/index.html`);
   }
@@ -1016,12 +1018,33 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
   const pageAnchors = new Map(loaded.map((page) => [page.sourceName, page.anchors]));
   const referencedSupportPaths = collectReferencedSupportPaths(loaded);
   assertReferencedSupportPathsAllowed(referencedSupportPaths);
-  const sidebar = sidebarFromToc(toc, pagesBySource, ordered);
+  const supportFiles = await copySupportFiles(
+    absoluteSourceRoot,
+    absoluteSiteRoot,
+    pageSources,
+    snapshots,
+    referencedSupportPaths,
+  );
+  const apiReferences = await prepareApiReferences({
+    sourceRoot: absoluteSourceRoot,
+    siteRoot: absoluteSiteRoot,
+    base: normalizedBase,
+    unofficial,
+    snapshots,
+    reservedPaths: supportFiles,
+  });
+  for (const reference of apiReferences.references) {
+    const page = pagesBySource.get(reference.page);
+    if (!page) throw new Error(`api-references.yml: page is not in the source navigation: ${reference.page}`);
+    reference.title = page.title;
+    reference.route = page.route;
+  }
+  const sidebar = apiReferenceSidebar(sidebarFromToc(toc, pagesBySource, ordered), apiReferences.references, pagesBySource);
 
   await pruneFormerGeneratedPages(absoluteSiteRoot, loaded);
 
   for (const page of loaded) {
-    const output = transformBody({
+    let output = transformBody({
       page,
       pageRoutes,
       pageAnchors,
@@ -1030,19 +1053,18 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
       authors,
       unofficial,
     });
+    const reference = apiReferences.references.find((item) => item.page === page.sourceName);
+    if (reference) {
+      output = generatedFrontmatter({ title: page.title, description: page.frontmatter.description, apiReference: true }, unofficial)
+        + page.headings.map((heading) => `<a id="${htmlEscape(heading.id)}"></a>`).join('\n')
+        + '\n' + apiReferenceMarkup(reference);
+    }
     const relative = page.route ? `${page.route}.md` : 'index.md';
     const destination = path.join(absoluteSiteRoot, 'src/content/docs', relative);
     await mkdir(path.dirname(destination), { recursive: true });
     await writeFile(destination, output);
   }
 
-  const supportFiles = await copySupportFiles(
-    absoluteSourceRoot,
-    absoluteSiteRoot,
-    pageSources,
-    snapshots,
-    referencedSupportPaths,
-  );
   const supportIndexes = await writeSupportDirectoryIndexes(
     absoluteSourceRoot,
     absoluteSiteRoot,
@@ -1063,7 +1085,8 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
     sourceDigest: sourceDigest(snapshots),
     requirementCount,
     sidebar,
-    supportFiles,
+    supportFiles: [...supportFiles, ...apiReferences.supportFiles],
+    apiReferences: apiReferences.references,
     supportIndexes,
     redirects,
     warnings: [...new Set(warnings)],

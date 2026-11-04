@@ -42,6 +42,31 @@
 }
 
 body { font-family: var(--sl-font); }
+
+/* API pages share the site shell, with Scalar outside the Markdown prose styles. */
+.api-reference-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; }
+.api-reference-badge {
+  display: inline-block;
+  margin: 0;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid var(--sl-color-accent);
+  border-radius: 0.3rem;
+  color: var(--sl-color-accent-high);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+.api-technical-metadata pre { overflow-x: auto; padding: 1rem; border: 1px solid var(--sl-color-gray-5); border-radius: 0.4rem; background: var(--sl-color-gray-6); font-size: 0.8125rem; line-height: 1.6; }
+.api-technical-metadata { margin: 0.75rem 0 0; }
+.api-technical-metadata summary { cursor: pointer; font-size: 0.875rem; font-weight: 600; }
+.api-reference-links { font-size: 0.8125rem; }
+body:has(.native-reference-content) { --sl-content-width: 100%; }
+body:has(.native-reference-content) .main-pane { min-width: 0; }
+body:has(.native-reference-content) .content-panel:has(.api-reference-title) { padding-bottom: 0; }
+body:has(.native-reference-content) .content-panel:has(.native-reference-content) { border-top: 0; }
+.native-reference-content { min-width: 0; }
+[data-scalar-reference] { --scalar-font: var(--sl-font); --scalar-font-code: var(--sl-font-mono); }
+/* Scalar 1.76 uses this stable introduction-entry suffix. The source stays in the download. */
+.native-reference-content .api-reference-native [data-scalar-reference] [id$='/description/introduction'] { display: none; }
 header.header {
   background: var(--sl-color-bg);
   border-bottom: 1px solid var(--sl-color-gray-5);
@@ -102,6 +127,20 @@ header.header {
   text-transform: uppercase;
 }
 .sidebar-content summary .caret { width: 0.8rem; color: var(--sl-color-gray-3); }
+.sidebar-content details details {
+  margin-top: 0.5rem;
+  margin-inline-start: 0.5rem;
+  padding-inline-start: 0.5rem;
+  border-inline-start: 1px solid var(--sl-color-gray-5);
+}
+.sidebar-content details details > summary .large {
+  color: var(--sl-color-gray-2);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.sidebar-content details details > ul { padding-inline-start: 0.5rem; }
 
 .draft-banner {
   display: flex;

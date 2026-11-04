@@ -1,0 +1,5 @@
+references:
+  - id: entries
+    page: resources/api-example.md
+    contract: api/openapi.yaml
+    role: example

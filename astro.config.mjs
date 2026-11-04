@@ -32,6 +32,8 @@ export default defineConfig({
         ThemeProvider: './src/components/GuideThemeProvider.astro',
         Banner: './src/components/PublicationBanner.astro',
         Footer: './src/components/PublicationFooter.astro',
+        MarkdownContent: './src/components/ReferenceContent.astro',
+        PageTitle: './src/components/ReferenceTitle.astro',
       },
       head: [
         { tag: 'meta', attrs: { name: 'robots', content: robotsContent(publication.unofficial) } },

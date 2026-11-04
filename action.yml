@@ -1,0 +1,51 @@
+name: GovStack specification site
+description: Build and verify a specification with the shared renderer and native OpenAPI references.
+inputs:
+  source:
+    description: Specification source directory, absolute or relative to the caller workspace.
+    required: true
+  output:
+    description: Static output directory, separate from the source and renderer.
+    required: true
+  profile:
+    description: Source adapter, framework or api-guide.
+    default: framework
+  base:
+    description: Site URL prefix, including leading and trailing slashes.
+    default: /
+  unofficial:
+    description: Keep unofficial preview notices unless explicitly set to false.
+    default: 'true'
+  source-url:
+    description: Optional GitHub source URL for the api-guide adapter.
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      with:
+        node-version: '24'
+    - name: Install the shared renderer
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        npm ci --ignore-scripts --no-audit --no-fund
+    - name: Build and verify the specification site
+      id: build
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        GOVSTACK_RENDERER_ROOT: ${{ github.action_path }}
+        DOCS_PROFILE: ${{ inputs.profile }}
+        DOCS_SOURCE_ROOT: ${{ inputs.source }}
+        DOCS_DIST_DIR: ${{ inputs.output }}
+        DOCS_BASE: ${{ inputs.base }}
+        DOCS_UNOFFICIAL: ${{ inputs.unofficial == 'false' && '0' || '1' }}
+        DOCS_SOURCE_URL: ${{ inputs.source-url }}
+      run: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        node "$GOVSTACK_RENDERER_ROOT/scripts/site.mjs" check
