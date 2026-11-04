@@ -64,9 +64,11 @@ body:has(.native-reference-content) .main-pane { min-width: 0; }
 body:has(.native-reference-content) .content-panel:has(.api-reference-title) { padding-bottom: 0; }
 body:has(.native-reference-content) .content-panel:has(.native-reference-content) { border-top: 0; }
 .native-reference-content { min-width: 0; }
-[data-scalar-reference] { --scalar-font: var(--sl-font); --scalar-font-code: var(--sl-font-mono); }
-/* Scalar 1.76 uses this stable introduction-entry suffix. The source stays in the download. */
-.native-reference-content .api-reference-native [data-scalar-reference] [id$='/description/introduction'] { display: none; }
+[data-scalar-reference] {
+  --scalar-custom-header-height: var(--sl-nav-height);
+  --scalar-font: var(--sl-font);
+  --scalar-font-code: var(--sl-font-mono);
+}
 header.header {
   background: var(--sl-color-bg);
   border-bottom: 1px solid var(--sl-color-gray-5);

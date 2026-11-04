@@ -34,8 +34,9 @@ Add an entry to root `api-references.yml` with `id`, `page`, `contract`, and
 illustrative binding. Keep those on separate pages. Do not add a requirement
 just to make a contract visible.
 
-The page opens on operations, with its role and downloads visible and technical
-metadata collapsed. The full source contract remains available to download.
+The page displays the contract introduction, when supplied, and its operations,
+with its role and downloads visible and technical metadata collapsed. The full
+source contract remains available to download.
 Local `$ref` dependencies are bundled; remote and escaping references fail the
 build. Do not copy bundled JSON or Scalar assets into the source repository.
 
