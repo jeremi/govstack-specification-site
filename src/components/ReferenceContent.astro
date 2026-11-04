@@ -10,6 +10,8 @@ const isReference = publication.apiReferences?.some((reference: { route: string 
 {isReference ? <div class="native-reference-content"><slot /></div> : <MarkdownContent><slot /></MarkdownContent>}
 
 <script>
+  import { scalarDocument } from '../lib/scalar-document.mjs';
+
   type ReferenceInstance = { destroy: () => void };
   type ScalarWindow = Window & { Scalar?: { createApiReference: (element: HTMLElement, configuration: Record<string, unknown>) => ReferenceInstance } };
   let scalarReady: Promise<void> | undefined;
@@ -32,15 +34,20 @@ const isReference = publication.apiReferences?.some((reference: { route: string 
         await loadScalar(host.dataset.scriptUrl!);
         const scalar = (window as ScalarWindow).Scalar;
         if (!scalar) throw new Error('Scalar is unavailable');
+        const response = await fetch(host.dataset.contractUrl!);
+        if (!response.ok) throw new Error(`Could not load OpenAPI document: HTTP ${response.status}`);
+        const content = scalarDocument(await response.json());
         const root = document.documentElement;
         let theme = root.dataset.theme;
         const mount = () => scalar.createApiReference(host, {
-          url: host.dataset.contractUrl,
+          content,
           showSidebar: false,
           hideSearch: true,
           withDefaultFonts: false,
           hideClientButton: true,
           hideTestRequestButton: true,
+          // The toolbar downloads the unchanged bundle, rather than the display copy.
+          hideDownloadButton: true,
           showDeveloperTools: 'never',
           telemetry: false,
           persistAuth: false,

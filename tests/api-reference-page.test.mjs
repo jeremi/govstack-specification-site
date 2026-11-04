@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { apiReferenceMarkup, prepareApiReferences } from '../scripts/api-references.mjs';
 
-test('native reference opens on the contract without a repeated introduction or response', () => {
+test('native reference uses Scalar introduction without a repeated hand-built introduction or response', async () => {
   const reference = {
     id: 'birth', title: 'Birth registration', role: 'example',
     contract: 'api/birth.yaml', contractUrl: '/registries/api-reference/birth.json',
@@ -25,6 +25,13 @@ test('native reference opens on the contract without a repeated introduction or 
   assert.match(html, /data-scalar-reference/);
   assert.match(html, /data-script-url="\/registries\/api-reference\/scalar\.js"/);
   assert.match(html, /\/registries\/api-reference\/birth\.json/);
+
+  const styles = await readFile(new URL('../src/styles/govstack.css', import.meta.url), 'utf8');
+  assert.doesNotMatch(
+    styles,
+    /\[id\$=['"]\/description\/introduction['"]\][^{]*\{[^}]*\bdisplay\s*:\s*none\b/i,
+    "Scalar's info.description introduction must remain visible",
+  );
 });
 
 test('native reference markup does not require an operation or response selection', () => {
@@ -48,6 +55,15 @@ test('native reference markup does not require an operation or response selectio
   assert.match(html, /\/payments\/api-reference\/payments\.json/);
   assert.match(html, /&quot;x-payments&quot;/);
   assert.doesNotMatch(html, /api-response-example|operation selection/i);
+});
+
+test('native Scalar sticky content clears the Starlight header', async () => {
+  const styles = await readFile(new URL('../src/styles/govstack.css', import.meta.url), 'utf8');
+  assert.match(
+    styles,
+    /\[data-scalar-reference\]\s*\{[^}]*--scalar-custom-header-height\s*:\s*var\(--sl-nav-height\)/i,
+    'Scalar must include the fixed Starlight header in its viewport offset',
+  );
 });
 
 test('absolute contract refs cannot use an in-source decoy to read outside the source', async (t) => {
