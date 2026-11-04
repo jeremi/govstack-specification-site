@@ -15,6 +15,10 @@ npm run check -- --profile framework --source /absolute/path/to/building-block -
 ```
 
 The source needs root `metadata.yml`, `authors.yml`, `toc.yml`, and Markdown.
+Root `README.md` plus the pages listed in `toc.yml` are the complete published
+page inventory. A relative Markdown link to any other source file fails the
+build; add a reader-facing page to `toc.yml`, or use a repository URL for
+maintainer material that is not part of the site.
 The template's `specification-site/` wrapper supplies the same commands from a
 Building Block repository, using an absolute `GOVSTACK_SITE_RENDERER` checkout.
 It deliberately rejects an older renderer when API references are configured.
@@ -36,9 +40,13 @@ just to make a contract visible.
 
 The page displays the contract introduction, when supplied, and its operations,
 with its role and downloads visible and technical metadata collapsed. The full
-source contract remains available to download.
-Local `$ref` dependencies are bundled; remote and escaping references fail the
-build. Do not copy bundled JSON or Scalar assets into the source repository.
+source contract remains available to download with its original bytes and
+source-relative dependency paths. Local `$ref` and `$dynamicRef` dependencies
+are both published and bundled; missing, directory, remote, and escaping
+references fail the build.
+The declaration seeds these downloads independently, so prose does not need a
+duplicate link merely to publish a contract. Do not copy bundled JSON or Scalar
+assets into the source repository.
 
 OpenAPI references are optional. AsyncAPI and protocol-standard surfaces keep
 their existing documentation; this renderer does not convert them to OpenAPI.

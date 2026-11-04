@@ -277,6 +277,23 @@ export async function checkBuilt({ distDir, manifest, base = '/' }) {
       source: page.source,
     });
   }
+  const pageCount = documents.size;
+
+  for (const supportIndex of manifest.supportIndexes ?? []) {
+    const relative = outputPath(supportIndex);
+    const file = relative && inside(distDir, relative);
+    if (!relative || !file || !(await isFile(file))) continue;
+    const nodes = elements(parse(await readFile(file, 'utf8')));
+    const route = relative.endsWith('/index.html')
+      ? relative.slice(0, -'/index.html'.length)
+      : path.posix.dirname(relative);
+    documents.set(file, {
+      names: new Set(nodes.map((node) => attribute(node, 'id')).filter(Boolean)),
+      nodes,
+      route,
+      source: relative,
+    });
+  }
 
   if (manifest.unofficial) {
     const supportHtml = [...(manifest.redirects ?? []).map((item) => item.legacy), ...(manifest.supportIndexes ?? [])];
@@ -355,5 +372,5 @@ export async function checkBuilt({ distDir, manifest, base = '/' }) {
   if (!(await isFile(path.join(distDir, 'pagefind/pagefind.js')))) {
     errors.push('Missing Pagefind search output');
   }
-  return { errors, pages: documents.size, links };
+  return { errors, pages: pageCount, links };
 }

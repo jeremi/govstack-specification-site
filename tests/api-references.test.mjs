@@ -81,12 +81,19 @@ const commonSchema = `{
         "data": {
           "type": "object",
           "additionalProperties": true,
-          "properties": { "status": { "type": "string" } }
+          "properties": { "status": { "$dynamicRef": "./status.schema.json#status" } }
         }
       },
       "x-source-metadata": { "authority": "fixture" }
     }
   }
+}
+`;
+
+const statusSchema = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$dynamicAnchor": "status",
+  "type": "string"
 }
 `;
 
@@ -172,13 +179,19 @@ async function fixture(t, references) {
   await write(sourceRoot, 'api-references.yml', config(references));
   await write(sourceRoot, 'api/openapi.yaml', contract);
   await write(sourceRoot, 'api/common/record.schema.json', commonSchema);
+  await write(sourceRoot, 'api/common/status.schema.json', statusSchema);
   return { root, sourceRoot, siteRoot };
 }
 
 async function sourceBytes(sourceRoot) {
   return new Map(
     await Promise.all(
-      ['api-references.yml', 'api/openapi.yaml', 'api/common/record.schema.json'].map(
+      [
+        'api-references.yml',
+        'api/openapi.yaml',
+        'api/common/record.schema.json',
+        'api/common/status.schema.json',
+      ].map(
         async (relative) => [relative, await readFile(path.join(sourceRoot, relative))],
       ),
     ),
@@ -255,12 +268,39 @@ test('prepares labelled references from exact published 200 examples', async (t)
   assert.ok(supportFiles.some((file) => /(^|\/)scalar[^/]*\.js$/.test(file)), 'local Scalar asset');
   assert.ok(supportFiles.includes('api-reference/record-retrieve.json'));
   assert.ok(supportFiles.includes('api-reference/record-search.json'));
+  assert.ok(supportFiles.includes('api/openapi.yaml'), 'declared source contract download');
+  assert.ok(supportFiles.includes('api/common/record.schema.json'), 'source contract dependency download');
+  assert.ok(supportFiles.includes('api/common/status.schema.json'), 'dynamic source dependency download');
   assert.equal(supportFiles.some((file) => file.endsWith('.html')), false);
   assert.equal(references[0].viewerUrl, undefined);
   assert.equal(references[1].viewerUrl, undefined);
-  for (const relative of ['api-references.yml', 'api/openapi.yaml', 'api/common/record.schema.json']) {
+  for (const relative of [
+    'api-references.yml',
+    'api/openapi.yaml',
+    'api/common/record.schema.json',
+    'api/common/status.schema.json',
+  ]) {
     assert.ok(snapshots.has(relative), `${relative} must contribute to source snapshots`);
   }
+  assert.equal(
+    (await readFile(path.join(siteRoot, 'public/api/openapi.yaml'))).compare(before.get('api/openapi.yaml')),
+    0,
+    'source contract download must preserve authoring bytes',
+  );
+  assert.equal(
+    (await readFile(path.join(siteRoot, 'public/api/common/record.schema.json'))).compare(
+      before.get('api/common/record.schema.json'),
+    ),
+    0,
+    'source dependency download must preserve authoring bytes',
+  );
+  assert.equal(
+    (await readFile(path.join(siteRoot, 'public/api/common/status.schema.json'))).compare(
+      before.get('api/common/status.schema.json'),
+    ),
+    0,
+    'dynamic source dependency download must preserve authoring bytes',
+  );
   await assertSourceUnchanged(sourceRoot, before);
 });
 
@@ -581,6 +621,7 @@ versions:
   await write(sourceRoot, 'api-references.yml', config(references));
   await write(sourceRoot, 'api/openapi.yaml', contract);
   await write(sourceRoot, 'api/common/record.schema.json', commonSchema);
+  await write(sourceRoot, 'api/common/status.schema.json', statusSchema);
   await execFileAsync('git', ['init', '-q', sourceRoot]);
   await execFileAsync('git', ['-C', sourceRoot, 'add', '.']);
   await execFileAsync('git', [
@@ -601,6 +642,7 @@ versions:
     'api-references.yml',
     'api/openapi.yaml',
     'api/common/record.schema.json',
+    'api/common/status.schema.json',
   ];
   const before = new Map(
     await Promise.all(
@@ -629,6 +671,19 @@ versions:
     'generic navigation remains present',
   );
   assert.equal(manifest.apiReferences.length, 2);
+  for (const relative of [
+    'api/openapi.yaml',
+    'api/common/record.schema.json',
+    'api/common/status.schema.json',
+  ]) {
+    assert.equal(manifest.supportFiles.includes(relative), true, `${relative} source download`);
+    assert.equal(
+      (await readFile(path.join(siteRoot, 'public', relative))).compare(before.get(relative)),
+      0,
+      `${relative} published bytes`,
+    );
+  }
+  assert.equal(manifest.supportFiles.includes('api-references.yml'), false);
   const corePage = await readFile(
     path.join(siteRoot, 'src/content/docs/contracts/core.md'),
     'utf8',

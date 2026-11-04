@@ -148,14 +148,25 @@ export async function prepareApiReferences({ sourceRoot, siteRoot, base = '/', s
   const source = await realpath(sourceRoot);
   const documents = new Map();
   for (const reference of references) await loadDependencies(source, reference.contract, snapshots, documents);
+  const sourceFiles = [...documents.keys()].toSorted();
+  for (const output of outputs) {
+    if (sourceFiles.some((sourceFile) => sourceFile === output || sourceFile.startsWith(`${output}/`) || output.startsWith(`${sourceFile}/`))) {
+      throw new Error(`Generated API reference output collides with source contract dependency: ${output}`);
+    }
+  }
   const publicRoot = path.join(siteRoot, 'public');
   const outputRoot = path.join(publicRoot, 'api-reference');
   await mkdir(outputRoot, { recursive: true });
+  for (const sourceFile of sourceFiles) {
+    const destination = path.join(publicRoot, sourceFile);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, snapshots.get(sourceFile));
+  }
   const bundlerConfig = path.join(siteRoot, 'api-reference-bundler.yml');
   await writeFile(bundlerConfig, 'extends: []\n');
   const scriptUrl = urlFor(base, scriptPath);
   await copyFile(path.join(rendererRoot, 'node_modules/@scalar/api-reference/dist/browser/standalone.js'), path.join(publicRoot, scriptPath));
-  const supportFiles = [scriptPath];
+  const supportFiles = [...sourceFiles, scriptPath];
   for (const reference of references) {
     const relative = `api-reference/${reference.id}.json`;
     const output = path.join(publicRoot, relative);
