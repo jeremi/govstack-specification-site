@@ -330,6 +330,24 @@ main h1 {
 .requirement-proof summary { width: fit-content; color: var(--sl-color-accent); cursor: pointer; font-size: 0.8125rem; font-weight: 600; }
 .requirement-proof-section { margin-top: 0.65rem; }
 :root[data-theme='dark'] .requirement-card { box-shadow: none; }
+/* Options sit beneath their variation point, as the source lists them (ARCH-ADR-6). */
+.requirement-options {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding-inline-start: 0.85rem;
+  border-inline-start: 1px dashed var(--sl-color-gray-5);
+}
+.sl-markdown-content .requirement-options > .requirement-card { margin-top: 0; }
+.requirement-options > .requirement-card { padding: 0.85rem; box-shadow: none; }
+.requirement-options .requirement-card-title { font-size: 0.9375rem; }
+.sl-markdown-content a.requirement-condition { text-decoration: none; }
+.sl-markdown-content a.requirement-condition:hover code { border-color: var(--sl-color-accent); }
+.profile-summary { border-inline-start: 3px solid var(--sl-color-accent); }
+.key-view-definition { color: var(--sl-color-gray-2); }
+.key-view-empty { color: var(--sl-color-gray-3); font-size: 0.875rem; }
+.sl-markdown-content .key-view-table { font-size: 0.875rem; }
+.term-source { color: var(--sl-color-gray-3); font-size: 0.8125rem; }
 
 /* Page navigation is secondary to the article, with one quiet footer rhythm. */
 .publication-footer { margin-top: 2rem; }

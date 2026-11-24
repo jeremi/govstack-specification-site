@@ -1,0 +1,62 @@
+name: Publish specifications to GitHub Pages
+# Builds every Building Block in publish/building-blocks.yml with this renderer and
+# deploys them as one site: <pages root>/bb/<id>/, with a landing page at the root.
+# Every build runs the renderer's built-output and HTTP checks; one failure stops
+# the deploy, so the published site keeps its previous version.
+# Deploying is opt-in: set the repository variable PUBLISH_PAGES to true. Without it,
+# pushes and manual runs still build and check, and the daily run is skipped.
+# It is not triggered by the Building Block repositories: a change there reaches the site at the
+# next daily run, or sooner by running this workflow by hand (Actions → Run workflow).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.event_name != 'schedule' || vars.PUBLISH_PAGES == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+      - name: Install the renderer
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Test the renderer
+        run: npm test
+      - name: Build and check every Building Block
+        env:
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          # A <owner>.github.io repository is served at the domain root; any other at /<repository>/.
+          shopt -s nocasematch
+          if [[ "$REPOSITORY_NAME" == "$REPOSITORY_OWNER.github.io" ]]; then base=/; else base="/$REPOSITORY_NAME/"; fi
+          node scripts/publish.mjs --output "$RUNNER_TEMP/site" --checkouts "$RUNNER_TEMP/sources" --base "$base" --unofficial
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+  deploy:
+    if: github.ref == 'refs/heads/main' && vars.PUBLISH_PAGES == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

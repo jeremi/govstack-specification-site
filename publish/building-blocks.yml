@@ -1,0 +1,26 @@
+# Building Blocks published to GitHub Pages by .github/workflows/pages.yml.
+#
+# Each entry is built from its repository at `ref` and served at
+#   https://<owner>.github.io/<repository>/bb/<id>/
+#
+#   id:          folder name under /bb/; lowercase kebab-case, never reused
+#   title:       name on the landing page
+#   repository:  GitHub owner/name of the specification source
+#   ref:         branch, tag or full commit to build; a commit makes the build reproducible
+#   description: optional line under the title on the landing page
+#
+# A Building Block that fails its build or checks stops the whole deploy, so that
+# the published site never mixes checked and unchecked specifications.
+
+building_blocks:
+  - id: wallet
+    title: Wallet
+    repository: GovStackWorkingGroup/bb-wallet
+    ref: feat/v2.0
+    description: Draft 2.0, organised into conformance profiles.
+
+  - id: document-management
+    title: Document Management
+    repository: GovStackWorkingGroup/bb-file-management
+    ref: v0.6
+    description: Test draft, not yet migrated to conformance profiles.

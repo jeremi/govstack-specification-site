@@ -24,6 +24,19 @@ import YAML from 'yaml';
 import { robotsContent } from '../scripts/publication.mjs';
 import { isPublishableSupportPath } from '../scripts/support-paths.mjs';
 import { apiReferenceMarkup, apiReferenceSidebar, prepareApiReferences } from '../scripts/api-references.mjs';
+import {
+  PROFILE_SECTION,
+  checkOptions,
+  checkProfileFunctionalityLinks,
+  collectConditions,
+  flattenRequirements,
+  observabilityWarning,
+  parseToc,
+  profileForSource,
+  resolveProfiles,
+  verificationOf,
+  yamlPage,
+} from './framework-model.mjs';
 
 const execFileAsync = promisify(execFile);
 const parser = unified().use(remarkParse).use(remarkGfm).use(remarkFrontmatter, ['yaml']);
@@ -46,7 +59,7 @@ export function routeFor(source) {
   if (source === 'README.md') return '';
   const route = source.endsWith('/README.md')
     ? source.slice(0, -'/README.md'.length)
-    : source.slice(0, -'.md'.length);
+    : source.replace(/\.(?:md|ya?ml)$/i, '');
   return route
     .split('/')
     .map((segment) => slug(segment))
@@ -72,6 +85,19 @@ function safeRelativeTarget(sourceName, target, directory = path.posix.dirname(s
     throw new Error(`${sourceName}: relative reference escapes the source root: ${target}`);
   }
   return normalized;
+}
+
+function isExternalReference(reference) {
+  return /^[A-Za-z][A-Za-z+.-]*:/.test(reference) || reference.startsWith('//');
+}
+
+// A local reference resolves against its page, or, with a leading "/", against the
+// specification root. The build's base is that root, so a specification published
+// under a project subpath only ever refers to its own pages and assets.
+function localTarget(sourceName, pathname) {
+  if (!pathname.startsWith('/')) return safeRelativeTarget(sourceName, pathname);
+  const relative = pathname.replace(/^\/+/, '');
+  return relative ? safeRelativeTarget(sourceName, relative, '.') : '.';
 }
 
 function sourceFrontmatter(tree) {
@@ -234,13 +260,6 @@ function localReferences(tree) {
   return references;
 }
 
-function discoverPages(toc) {
-  const ordered = ['README.md'];
-  for (const [section, entries] of Object.entries(toc)) {
-    ordered.push(...entries.map((entry) => path.posix.join(section, entry)));
-  }
-  return { ordered, pages: new Set(ordered) };
-}
 
 function splitReference(url) {
   const hashAt = url.indexOf('#');
@@ -266,20 +285,11 @@ function collectReferencedSupportPaths(pages, pageSources) {
   const references = new Set();
   for (const page of pages) {
     for (const reference of localReferences(page.tree)) {
-      if (
-        /^[A-Za-z][A-Za-z+.-]*:/.test(reference) ||
-        reference.startsWith('//') ||
-        reference.startsWith('/') ||
-        reference.startsWith('#')
-      ) {
-        continue;
-      }
+      if (isExternalReference(reference) || reference.startsWith('#')) continue;
       const { pathname } = splitReference(reference);
       if (!pathname) continue;
-      const target = safeRelativeTarget(
-        page.sourceName,
-        decodedPathname(page.sourceName, pathname),
-      );
+      const target = localTarget(page.sourceName, decodedPathname(page.sourceName, pathname));
+      if (target === '.') continue;
       if (target.endsWith('.md')) {
         if (!pageSources.has(target)) {
           throw new Error(
@@ -292,7 +302,7 @@ function collectReferencedSupportPaths(pages, pageSources) {
       if ([...pageSources].some((source) => source.startsWith(`${directory}/`))) continue;
       references.add(target);
     }
-    for (const requirement of page.frontmatter.requirements ?? []) {
+    for (const { requirement } of flattenRequirements(page.frontmatter.requirements)) {
       for (const [field, value] of [
         ['contract', requirement?.contract],
         ['test', requirement?.test],
@@ -337,7 +347,7 @@ function referencedSupportPathIncludes(relative, referencedPaths) {
 }
 
 function rewriteReference({ url, sourceName, pageRoutes, pageAnchors, base }) {
-  if (/^[A-Za-z][A-Za-z+.-]*:/.test(url) || url.startsWith('//') || url.startsWith('/')) return url;
+  if (isExternalReference(url)) return url;
   if (url.startsWith('#')) {
     const id = decodeURIComponent(url.slice(1));
     if (id && !pageAnchors.get(sourceName)?.has(id)) {
@@ -346,7 +356,8 @@ function rewriteReference({ url, sourceName, pageRoutes, pageAnchors, base }) {
     return url;
   }
   const { pathname, query, fragment } = splitReference(url);
-  const target = safeRelativeTarget(sourceName, pathname);
+  const target = localTarget(sourceName, pathname);
+  if (target === '.') return `${baseUrl(base)}${query}${fragment}`;
   if (pageRoutes.has(target)) {
     if (fragment) {
       const id = decodeURIComponent(fragment.slice(1));
@@ -457,7 +468,8 @@ function documentationSections(documentation = '') {
 }
 
 function rootReference(value, pageRoutes, base) {
-  const { pathname, query, fragment } = splitReference(value);
+  const { query, fragment, ...parts } = splitReference(value);
+  const pathname = parts.pathname.replace(/^\/+/, '');
   if (pageRoutes.has(pathname)) {
     const route = pageRoutes.get(pathname);
     return `${baseUrl(base, route ? `${route}/` : '')}${query}${fragment}`;
@@ -465,15 +477,74 @@ function rootReference(value, pageRoutes, base) {
   return `${baseUrl(base, pathname)}${query}${fragment}`;
 }
 
-function requirementCard(requirement, index, pageRoutes, base) {
+function asNames(value) {
+  if (value === undefined || value === null || value === '') return [];
+  return (Array.isArray(value) ? value : [value]).map(String);
+}
+
+// A condition, option key or extension id, linked to its view when there is one.
+function conditionChip(name, context) {
+  const label = `<code>${htmlEscape(name)}</code>`;
+  const anchor = context.keyView?.anchors.get(name);
+  if (!anchor) return label;
+  return `<a class="requirement-condition" href="${htmlEscape(`${context.keyView.href}#${anchor}`)}">${label}</a>`;
+}
+
+function conditionList(names, context) {
+  return names.map((name) => conditionChip(name, context)).join(', ');
+}
+
+function profileHref(profile, context) {
+  const route = context.pageRoutes.get(profile.introduction);
+  return baseUrl(context.base, route ? `${route}/` : '');
+}
+
+function profileLink(id, context) {
+  const profile = context.profilesById?.get(id);
+  if (!profile) return `<code>${htmlEscape(id)}</code>`;
+  return `<a href="${htmlEscape(profileHref(profile, context))}">${htmlEscape(profile.title)}</a>`;
+}
+
+function profileTypeLabel(profile) {
+  return profile.type === 'CORE' ? 'Core' : 'Extension';
+}
+
+function conditionRow(field, names, context) {
+  if (!names.length) return undefined;
+  const label = names.length === 1 ? 'Applies when' : field === 'applies_when_all' ? 'Applies when all of' : 'Applies when any of';
+  return [label, conditionList(names, context)];
+}
+
+// A contract or test: a source path links to its published page or file, a web URL
+// links as written, and any other identifier, such as a specification URN, is shown
+// as written without a link.
+function referenceValue(value, context) {
+  const text = String(value);
+  const label = `<code>${htmlEscape(text)}</code>`;
+  if (/^https?:\/\//i.test(text)) return `<a href="${htmlEscape(text)}">${label}</a>`;
+  if (isExternalReference(text)) return label;
+  return `<a href="${htmlEscape(rootReference(text, context.pageRoutes, context.base))}">${label}</a>`;
+}
+
+function requirementCard(requirement, anchor, context, parent) {
+  const options = !parent && Array.isArray(requirement.options) ? requirement.options : [];
+  const isVariationPoint = !parent && Boolean(requirement.select || options.length);
+  const isOption = Boolean(parent || requirement.option_of);
+  const extension = parent && requirement.extension ? String(requirement.extension) : '';
   const permanentId = requirement.id ? String(requirement.id) : 'Unnumbered draft';
-  const key = requirement.key ? `<code class="requirement-key">${htmlEscape(requirement.key)}</code>` : '';
-  const kind = requirement.select ? 'Variation point' : requirement.option_of ? 'Option' : 'Requirement';
+  const kind = isVariationPoint ? 'Variation point' : isOption ? 'Option' : 'Requirement';
   const cssKind = kind.toLowerCase().replaceAll(' ', '-');
+  const verification = verificationOf(requirement, { isVariationPoint, isExtensionOption: Boolean(extension) });
+  const observability = observabilityWarning(requirement, verification, context.sourceName);
+  if (observability) context.warnings.push(observability);
+  if (verification.method === 'unclassified' && !requirement.option_of && !(requirement.select && !options.length)) {
+    context.warnings.push(`${context.sourceName}: requirement ${requirement.id || `“${String(requirement.statement ?? '').slice(0, 60)}”`} has no interaction and is reported as unclassified`);
+  }
+  const key = requirement.key ? conditionChip(String(requirement.key), context).replace('<code>', '<code class="requirement-key">') : '';
   const badges = [
     ['Lifecycle', requirement.status],
     ['Level', requirement.level],
-    ['Observability', requirement.observability],
+    ['Observability', verification.method === 'legacy' ? requirement.observability : undefined],
     ['Mutability', requirement.mutability],
     ['Interaction', requirement.interaction],
   ]
@@ -484,27 +555,36 @@ function requirementCard(requirement, index, pageRoutes, base) {
     )
     .join('');
   const rows = [];
-  if (requirement.select?.min !== undefined) rows.push(['Minimum selections', requirement.select.min]);
+  if (isVariationPoint && options.length) {
+    const min = requirement.select?.min ?? 1;
+    const max = requirement.select?.max;
+    rows.push([
+      'Selection',
+      htmlEscape(`Meet at least ${min} of its ${options.length} options${max !== undefined ? `, and declare at most ${max}` : ''}`),
+    ]);
+  } else if (requirement.select?.min !== undefined) {
+    rows.push(['Minimum selections', htmlEscape(requirement.select.min)]);
+  }
   if (requirement.option_of) {
-    rows.push(['Option of', requirement.option_of]);
-    rows.push(['Inherited option obligation', `Selected option under ${requirement.option_of}`]);
+    rows.push(['Option of', htmlEscape(requirement.option_of)]);
+    rows.push(['Inherited option obligation', htmlEscape(`Selected option under ${requirement.option_of}`)]);
   }
-  if (requirement.applies_when) rows.push(['Any of', requirement.applies_when.join(', ')]);
-  if (requirement.applies_when_all) rows.push(['All of', requirement.applies_when_all.join(', ')]);
-  if (requirement.contract) {
-    const href = rootReference(requirement.contract, pageRoutes, base);
-    rows.push(['Contract', `<a href="${htmlEscape(href)}"><code>${htmlEscape(requirement.contract)}</code></a>`]);
+  if (extension) rows.push(['Met by claiming', `${profileLink(extension, context)} extension`]);
+  const presentedBy = asNames(requirement.presented_by);
+  if (presentedBy.length) rows.push(['Presented by', conditionList(presentedBy, context)]);
+  for (const field of ['applies_when', 'applies_when_all']) {
+    const row = conditionRow(field, asNames(requirement[field]), context);
+    if (row) rows.push(row);
   }
+  if (verification.label) rows.push(['Verification', htmlEscape(verification.label)]);
+  if (requirement.contract) rows.push(['Contract', referenceValue(requirement.contract, context)]);
   if (requirement.api_operation_id) rows.push(['Operation', `<code>${htmlEscape(requirement.api_operation_id)}</code>`]);
-  if (requirement.test) {
-    const href = rootReference(requirement.test, pageRoutes, base);
-    rows.push(['Test', `<a href="${htmlEscape(href)}"><code>${htmlEscape(requirement.test)}</code></a>`]);
-  }
+  if (requirement.test) rows.push(['Test', referenceValue(requirement.test, context)]);
   const rowMarkup = rows
     .map(([label, value]) => `<div><dt>${htmlEscape(label)}</dt><dd>${String(value)}</dd></div>`)
     .join('');
 
-  const documentation = documentationSections(requirement.documentation);
+  const documentation = documentationSections(requirement.documentation ?? '');
   const visibleLabels = new Set(['Purpose', 'Prerequisite', 'Condition', 'Scope', 'Constraint', 'Documentation']);
   const visible = documentation
     .filter((section) => visibleLabels.has(section.label))
@@ -523,11 +603,16 @@ function requirementCard(requirement, index, pageRoutes, base) {
   const proofMarkup = proof
     ? `<details class="requirement-proof"><summary>Evidence and verification</summary>${proof}</details>`
     : '';
+  const optionMarkup = options.length
+    ? `<div class="requirement-options" aria-label="Options">
+${options.map((option, index) => requirementCard(option ?? {}, `${anchor}-option-${index + 1}`, context, requirement)).join('\n')}
+</div>`
+    : '';
 
-  return `<article class="requirement-card ${cssKind}" id="requirement-${index}" aria-labelledby="requirement-${index}-title">
+  return `<article class="requirement-card ${cssKind}" id="${anchor}" aria-labelledby="${anchor}-title">
   <header class="requirement-card-header">
     <span class="requirement-kind">${kind}</span>
-    <div class="requirement-card-title requirement-statement" id="requirement-${index}-title" role="heading" aria-level="3">${inlineHtml(requirement.statement)}</div>
+    <div class="requirement-card-title requirement-statement" id="${anchor}-title" role="heading" aria-level="${parent ? 4 : 3}">${inlineHtml(requirement.statement)}</div>
     <span class="requirement-draft-id">${htmlEscape(permanentId)}</span>
   </header>
   ${key ? `<div class="requirement-key-row"><span class="requirement-label">Key</span>${key}</div>` : ''}
@@ -535,37 +620,93 @@ function requirementCard(requirement, index, pageRoutes, base) {
   ${rowMarkup ? `<dl class="requirement-rows">${rowMarkup}</dl>` : ''}
   ${visible}
   ${proofMarkup}
+  ${optionMarkup}
 </article>`;
 }
 
-function functionalityMarkup(frontmatter, pageRoutes, base) {
+function capabilityTitles(ids, context) {
+  return ids
+    .map((id) => {
+      const capability = context.capabilities.get(id);
+      if (!capability) {
+        context.warnings.push(`${context.sourceName}: realises ${id}, which is not a capability in metadata.yml`);
+        return `<code>${htmlEscape(id)}</code>`;
+      }
+      return htmlEscape(capability.title ?? id);
+    })
+    .join(', ');
+}
+
+function functionalityMarkup(frontmatter, context) {
   const requirements = frontmatter.requirements ?? [];
   if (!requirements.length) return undefined;
   const facts = [];
-  if (frontmatter.realises?.length) facts.push(['Capabilities', frontmatter.realises.join(', ')]);
-  if (frontmatter.conformance) facts.push(['Conformance', frontmatter.conformance]);
-  if (frontmatter.conformance === 'EXTENSION') facts.push(['Type', 'Extension']);
-  if (frontmatter.extension) facts.push(['Extension', String(frontmatter.extension)]);
+  if (context.profile) {
+    facts.push([
+      'Conformance profile',
+      `${profileLink(context.profile.id, context)} (${profileTypeLabel(context.profile).toLowerCase()})`,
+    ]);
+    if (frontmatter.conformance !== undefined || frontmatter.extension !== undefined) {
+      context.warnings.push(`${context.sourceName}: conformance and extension are ignored; a functionality belongs to the conformance profile whose folder holds it`);
+    }
+  } else {
+    if (frontmatter.conformance) facts.push(['Conformance', htmlEscape(frontmatter.conformance)]);
+    if (frontmatter.conformance === 'EXTENSION') facts.push(['Type', 'Extension']);
+    if (frontmatter.extension) facts.push(['Extension', htmlEscape(frontmatter.extension)]);
+  }
+  const realises = asNames(frontmatter.realises);
+  if (realises.length) facts.splice(context.profile ? 1 : 0, 0, ['Capabilities', capabilityTitles(realises, context)]);
+  for (const field of ['applies_when', 'applies_when_all']) {
+    const row = conditionRow(field, asNames(frontmatter[field]), context);
+    if (row) facts.push(row);
+  }
   const factMarkup = facts
-    .map(([label, value]) => `<div><dt>${htmlEscape(label)}</dt><dd>${inlineHtml(value)}</dd></div>`)
+    .map(([label, value]) => `<div><dt>${htmlEscape(label)}</dt><dd>${value}</dd></div>`)
     .join('');
   const cards = requirements
-    .map((requirement, index) => requirementCard(requirement, index + 1, pageRoutes, base))
+    .map((requirement, index) => requirementCard(requirement ?? {}, `requirement-${index + 1}`, context))
     .join('\n');
+  const optionCount = requirements.reduce(
+    (total, requirement) => total + (Array.isArray(requirement?.options) ? requirement.options.length : 0),
+    0,
+  );
+  const unnumbered = flattenRequirements(requirements).some(({ requirement }) => !requirement?.id);
+  const counted = `${requirements.length} requirement${requirements.length === 1 ? '' : 's'}`;
+  const optionText = optionCount ? `, and ${optionCount} option${optionCount === 1 ? '' : 's'} beneath its variation points` : '';
   return {
     summary: `<div class="functionality-summary">
-  <p>${inlineHtml(frontmatter.description)}</p>
+  <p>${inlineHtml(String(frontmatter.description ?? '').trim())}</p>
   ${factMarkup ? `<dl>${factMarkup}</dl>` : ''}
 </div>`,
     requirements: `## Requirements
 
-<p class="requirements-introduction">This functionality defines ${requirements.length} authoring-draft requirement${requirements.length === 1 ? '' : 's'}. “Unnumbered draft” reflects the source metadata and does not invent a permanent requirement identifier.</p>
+<p class="requirements-introduction">This functionality defines ${counted}${optionText}.${unnumbered ? ' “Unnumbered draft” reflects the source metadata and does not invent a permanent requirement identifier.' : ''}</p>
 
 <div class="requirements-list">
 ${cards}
 </div>
 `,
   };
+}
+
+// The facts of a conformance profile, from the front matter of its introduction.
+function profileMarkup(profile, context) {
+  const core = context.profiles.find((candidate) => candidate.type === 'CORE');
+  const buildsOn = profile.type === 'CORE'
+    ? 'Every conformant software solution meets this profile'
+    : [core.id, ...profile.requires].map((id) => profileLink(id, context)).join(', ');
+  const facts = [
+    ['Type', profile.type === 'CORE' ? 'Core' : 'Extension'],
+    ['Id', `<code>${htmlEscape(profile.id)}</code>`],
+    [profile.type === 'CORE' ? 'Claimed by' : 'Builds on', buildsOn],
+    ['Role', profile.role ? htmlEscape(profile.role) : ''],
+    ['Reference architecture', profile.referenceArchitecture ? `<code>${htmlEscape(profile.referenceArchitecture)}</code>` : ''],
+    ['Functionalities', htmlEscape(profile.functionalities.length)],
+  ].filter(([, value]) => value);
+  return `<div class="functionality-summary profile-summary">
+  <p>${inlineHtml(profile.description)}</p>
+  <dl>${facts.map(([label, value]) => `<div><dt>${htmlEscape(label)}</dt><dd>${value}</dd></div>`).join('')}</dl>
+</div>`;
 }
 
 function markdownTableCell(value) {
@@ -596,7 +737,26 @@ function extensionsMetadata(extensions) {
   return rendered.length ? rendered.join('<br>') : 'None declared';
 }
 
-function homeMetadataMarkup(metadata, authors) {
+function profilesTable(context) {
+  const core = context.profiles.find((profile) => profile.type === 'CORE');
+  const rows = context.profiles.map((profile) => {
+    const href = profileHref(profile, context);
+    const buildsOn = profile.type === 'CORE'
+      ? ''
+      : [core.id, ...profile.requires].map((id) => `\`${id}\``).join(', ');
+    return `| [${markdownTableCell(profile.title)}](${href}) | \`${profile.id}\` | ${profileTypeLabel(profile)} | ${buildsOn} | ${markdownTableCell(profile.description)} |`;
+  });
+  return `## Conformance profiles
+
+Every conformant software solution meets the core. A software solution may claim extensions in addition to it, and meets each extension it claims in full.
+
+| Profile | Id | Type | Builds on | Description |
+| --- | --- | --- | --- | --- |
+${rows.join('\n')}
+`;
+}
+
+function homeMetadataMarkup(metadata, authors, context) {
   const versions = metadata.versions ?? [];
   const version = versions.find((item) => item.latest) ?? versions[0] ?? {};
   const facts = [
@@ -607,8 +767,14 @@ function homeMetadataMarkup(metadata, authors) {
     ['Owner group', metadata.owner_group ?? ''],
     ['Canonical URL', metadata.url ?? ''],
     ['Repository', metadata.repository ?? ''],
-    ['Extensions', extensionsMetadata(metadata.extensions)],
   ];
+  if (context.profiles.length) {
+    if (metadata.extensions !== undefined) {
+      context.warnings.push('metadata.yml: extensions is ignored; conformance profiles are declared in the introduction.md of each profile folder');
+    }
+  } else {
+    facts.push(['Extensions', extensionsMetadata(metadata.extensions)]);
+  }
   const capabilities = (metadata.capabilities ?? [])
     .map(
       (capability) =>
@@ -629,6 +795,7 @@ function homeMetadataMarkup(metadata, authors) {
 | --- | --- |
 ${facts.map(([label, value]) => `| ${markdownTableCell(label)} | ${markdownTableCell(value)} |`).join('\n')}
 
+${context.profiles.length ? profilesTable(context) : ''}
 ## Capabilities
 
 ${capabilities}
@@ -654,7 +821,7 @@ function generatedFrontmatter({ title, description, pagefind, apiReference }, un
   })}---\n\n`;
 }
 
-function transformBody({ page, pageRoutes, pageAnchors, base, metadata, authors, unofficial }) {
+function transformBody({ page, pageRoutes, pageAnchors, base, metadata, authors, unofficial, context }) {
   const { sourceName, source, tree, frontmatter, headings, title } = page;
   const replacements = [];
   if (page.frontmatterNode) {
@@ -683,18 +850,23 @@ function transformBody({ page, pageRoutes, pageAnchors, base, metadata, authors,
       value: '##',
     });
   }
-  replacements.push(
-    ...referenceReplacements({ tree, source, sourceName, pageRoutes, pageAnchors, base }),
-  );
+  if (!page.generated) {
+    replacements.push(
+      ...referenceReplacements({ tree, source, sourceName, pageRoutes, pageAnchors, base }),
+    );
+  }
   let body = applyReplacements(source, replacements, sourceName).replace(/^\s+/, '');
   if (page.compatibilityAnchors?.size) {
     body = `${[...page.compatibilityAnchors].map((id) => `<a id="${htmlEscape(id)}"></a>`).join('\n')}\n\n${body}`;
   }
-  const functionality = functionalityMarkup(frontmatter, pageRoutes, base);
+  const pageContext = { ...context, sourceName, profile: profileForSource(context.profiles, sourceName) };
+  const profile = context.profiles.find((candidate) => candidate.introduction === sourceName);
+  if (profile) body = `${profileMarkup(profile, pageContext)}\n\n${body}`;
+  const functionality = profile ? undefined : functionalityMarkup(frontmatter, pageContext);
   if (functionality) {
     body = [functionality.summary, body, functionality.requirements].filter(Boolean).join('\n\n');
   }
-  if (sourceName === 'README.md') body = `${homeMetadataMarkup(metadata, authors)}\n\n${body}`;
+  if (sourceName === 'README.md') body = `${homeMetadataMarkup(metadata, authors, context)}\n\n${body}`;
   const isArchive = sourceName.startsWith('resources/history/') || sourceName.includes('/legacy/');
   if (isArchive) {
     body = `:::caution[Archived source]\nThis page preserves historical material and is not current conformance text.\n:::\n\n${body}`;
@@ -708,15 +880,40 @@ function transformBody({ page, pageRoutes, pageAnchors, base, metadata, authors,
   return `${generatedFrontmatter({ title, description, pagefind: isArchive ? false : undefined }, unofficial)}${body}`;
 }
 
-function sidebarFromToc(toc, pagesBySource) {
+function sectionLabel(section) {
+  const words = section.replaceAll('-', ' ').replaceAll('_', ' ');
+  return words[0].toUpperCase() + words.slice(1);
+}
+
+function sidebarFromToc(tocModel, pagesBySource, { profiles, keyView }) {
   const sidebar = [{ label: 'Home', slug: '' }];
-  for (const [section, entries] of Object.entries(toc)) {
-    const items = entries.map((entry) => {
-      const source = path.posix.join(section, entry);
-      const page = pagesBySource.get(source);
-      return { label: page.title, slug: page.route };
-    });
-    sidebar.push({ label: section[0].toUpperCase() + section.slice(1), items });
+  const link = (source, label) => {
+    const page = pagesBySource.get(source);
+    return { label: label ?? page.title, slug: page.route };
+  };
+  const item = (entry) => {
+    if (entry.kind === 'page') return link(entry.source);
+    if (entry.kind === 'folder') {
+      // Starlight adds the base to sidebar links itself.
+      return { label: `${path.posix.basename(entry.source)}/`, link: `/${entry.source}/` };
+    }
+    if (entry.kind === 'group') return { label: entry.label, items: entry.items.map(item) };
+    const profile = profiles.find((candidate) => candidate.id === entry.id);
+    return {
+      label: profile.title,
+      badge: { text: profile.type === 'CORE' ? 'Core' : 'Extension', variant: profile.type === 'CORE' ? 'note' : 'default' },
+      items: entry.items.map((child) =>
+        child.kind === 'page' && child.source === profile.introduction ? link(child.source, 'Introduction') : item(child),
+      ),
+    };
+  };
+  for (const section of tocModel.sections) {
+    const items = section.items.map(item);
+    if (section.key === PROFILE_SECTION && keyView) items.push({ label: keyView.title, slug: keyView.route });
+    sidebar.push({ label: sectionLabel(section.key), items });
+  }
+  if (keyView && !tocModel.sections.some((section) => section.key === PROFILE_SECTION)) {
+    sidebar.push({ label: keyView.title, slug: keyView.route });
   }
   return sidebar;
 }
@@ -939,7 +1136,7 @@ function redirectHtml(target, unofficial) {
 async function writeRedirects(siteRoot, pages, base, unofficial) {
   const redirects = [];
   for (const page of pages) {
-    if (page.sourceName === 'README.md') continue;
+    if (page.sourceName === 'README.md' || page.generated || !page.sourceName.endsWith('.md')) continue;
     const legacy = page.sourceName.replace(/\.md$/, '.html');
     const target = baseUrl(base, page.route ? `${page.route}/` : '');
     const output = path.join(siteRoot, 'public', legacy);
@@ -959,16 +1156,18 @@ async function writeSupportDirectoryIndexes(
   referencedPaths,
   supportFiles,
   unofficial,
+  listedFolders = [],
 ) {
   const indexes = [];
-  const directories = new Set();
+  const directories = new Set(listedFolders);
   const sourceReal = await realpath(sourceRoot);
   for (const page of pages) {
     for (const reference of localReferences(page.tree)) {
-      if (/^[A-Za-z][A-Za-z+.-]*:/.test(reference) || reference.startsWith('//')) continue;
+      if (isExternalReference(reference)) continue;
       const { pathname } = splitReference(reference);
       if (!pathname.endsWith('/')) continue;
-      const target = safeRelativeTarget(page.sourceName, pathname).replace(/\/+$/, '');
+      const target = localTarget(page.sourceName, pathname).replace(/\/+$/, '');
+      if (target === '.') continue;
       if ([...pageRoutes.keys()].some((source) => source.startsWith(`${target}/`))) continue;
       try {
         const sourcePath = path.join(sourceRoot, target);
@@ -1045,10 +1244,10 @@ function addArchiveCompatibilityAnchors(loaded, warnings) {
   const bySource = new Map(loaded.map((page) => [page.sourceName, page]));
   for (const page of loaded) {
     for (const reference of localReferences(page.tree)) {
-      if (/^[A-Za-z][A-Za-z+.-]*:/.test(reference) || reference.startsWith('//')) continue;
+      if (isExternalReference(reference)) continue;
       const { pathname, fragment } = splitReference(reference);
       if (!fragment) continue;
-      const targetName = pathname ? safeRelativeTarget(page.sourceName, pathname) : page.sourceName;
+      const targetName = pathname ? localTarget(page.sourceName, pathname) : page.sourceName;
       const target = bySource.get(targetName);
       const id = decodeURIComponent(fragment.slice(1));
       if (!target || !id || target.anchors.has(id)) continue;
@@ -1059,6 +1258,110 @@ function addArchiveCompatibilityAnchors(loaded, warnings) {
       warnings.push(`${targetName}: retained archived inbound fragment #${id} as a compatibility anchor`);
     }
   }
+}
+
+const KEY_VIEW_TITLE = 'Options and conditions';
+
+function pageHref(page, base, anchor) {
+  return `${baseUrl(base, page.route ? `${page.route}/` : '')}${anchor ? `#${anchor}` : ''}`;
+}
+
+function htmlLink(href, label) {
+  return `<a href="${htmlEscape(href)}">${label}</a>`;
+}
+
+// The views by key of ARCH-ADR-6: for every option key and extension profile, the
+// requirements whose applies_when names it, grouped by functionality. It is
+// generated from the functionality files, so it never disagrees with them, and it
+// is informative: conformance is still assessed per requirement.
+function keyViewPage({ conditions, profiles, pageRoutes, base, metadata }) {
+  const entries = [...conditions.values()];
+  const options = entries.filter((entry) => entry.kind === 'option');
+  if (!options.length && !entries.some((entry) => entry.uses.length)) return undefined;
+  const route = profiles.length ? `${PROFILE_SECTION}/options-and-conditions` : 'options-and-conditions';
+  const slugger = new GithubSlugger();
+  const anchors = new Map();
+  const profileOf = (page) => profileForSource(profiles, page.sourceName);
+  const profileLabel = (profile) =>
+    profile ? `${htmlLink(baseUrl(base, `${pageRoutes.get(profile.introduction)}/`), htmlEscape(profile.title))} (${profile.type === 'CORE' ? 'core' : 'extension'})` : '';
+
+  function usesTable(entry) {
+    if (!entry.uses.length) return '<p class="key-view-empty">No requirement names it in <code>applies_when</code>.</p>';
+    const rows = entry.uses.map((use) => {
+      const requirement = use.requirement;
+      const statement = requirement
+        ? htmlLink(pageHref(use.page, base, use.anchor), inlineHtml(requirement.statement))
+        : `Every requirement of ${htmlLink(pageHref(use.page, base), htmlEscape(use.page.title))}`;
+      const field = use.mode === 'all' ? 'applies_when_all' : 'applies_when';
+      const names = asNames((requirement ?? use.page.frontmatter)[field]);
+      const condition = names.length === 1 ? '' : use.mode === 'all' ? 'all of ' : 'any of ';
+      return `<tr><td>${statement}</td><td>${htmlLink(pageHref(use.page, base), htmlEscape(use.page.title))}</td><td>${htmlEscape(requirement?.level ?? '')}</td><td>${condition}${names.map((name) => `<code>${htmlEscape(name)}</code>`).join(', ')}</td></tr>`;
+    });
+    return `<table class="key-view-table"><thead><tr><th>Requirement</th><th>Functionality</th><th>Level</th><th>Applies when</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  }
+
+  const sections = [
+    `<p>Each option of a variation point that other requirements refer to has a key. A requirement whose <code>applies_when</code> names a key, or the id of an extension profile, applies only to a software solution that meets that option or claims that extension. Otherwise it is reported as not applicable, neither passed nor failed. This page lists them by key. It is generated from the functionality files and adds no requirement of its own.</p>`,
+  ];
+  if (options.length) {
+    sections.push('## Options');
+    slugger.slug('Options');
+    for (const entry of options) {
+      sections.push(`### ${entry.name}`);
+      anchors.set(entry.name, slugger.slug(entry.name));
+      const variationAnchor = entry.anchor.replace(/-option-\d+$/, '');
+      const id = entry.requirement.id ? `Option ${htmlEscape(entry.requirement.id)} of the` : 'An option of the';
+      const where = [htmlLink(pageHref(entry.page, base), htmlEscape(entry.page.title)), profileLabel(profileOf(entry.page))].filter(Boolean).join(', ');
+      const extension = entry.requirement.extension ? profiles.find((profile) => profile.id === String(entry.requirement.extension)) : undefined;
+      sections.push(
+        `<p class="key-view-definition">${id} variation point ${htmlLink(pageHref(entry.page, base, variationAnchor), `“${inlineHtml(entry.parent.statement)}”`)} in ${where}.</p>`,
+        `<blockquote><p>${htmlLink(pageHref(entry.page, base, entry.anchor), inlineHtml(entry.requirement.statement))}</p></blockquote>`,
+        ...(extension ? [`<p>It is met by claiming the ${htmlLink(baseUrl(base, `${pageRoutes.get(extension.introduction)}/`), htmlEscape(extension.title))} extension.</p>`] : []),
+        usesTable(entry),
+      );
+    }
+  }
+  const extensions = entries.filter((entry) => entry.kind === 'extension' && (entry.uses.length || options.some((option) => String(option.requirement.extension ?? '') === entry.name)));
+  if (extensions.length) {
+    sections.push('## Extensions');
+    slugger.slug('Extensions');
+    for (const entry of extensions) {
+      sections.push(`### ${entry.name}`);
+      anchors.set(entry.name, slugger.slug(entry.name));
+      sections.push(
+        `<p class="key-view-definition">Claiming the ${htmlLink(baseUrl(base, `${pageRoutes.get(entry.profile.introduction)}/`), htmlEscape(entry.profile.title))} extension. Its own functionalities apply in full; the requirements below sit in other functionalities and apply only when it is claimed.</p>`,
+        usesTable(entry),
+      );
+    }
+  }
+  const source = `${sections.join('\n\n')}\n`;
+  const sourceName = `${route}.md`;
+  const tree = parser.parse(source);
+  const headings = headingDetails(tree, sourceName);
+  for (const [name, anchor] of anchors) {
+    if (!headings.some((heading) => heading.id === anchor)) throw new Error(`${sourceName}: generated anchor #${anchor} for ${name} is missing`);
+  }
+  return {
+    title: KEY_VIEW_TITLE,
+    route,
+    href: baseUrl(base, `${route}/`),
+    anchors,
+    page: {
+      sourceName,
+      source,
+      tree,
+      frontmatterNode: undefined,
+      frontmatter: {
+        title: KEY_VIEW_TITLE,
+        description: `What follows from each option and extension of ${metadata.name}, by key.`,
+      },
+      headings,
+      title: KEY_VIEW_TITLE,
+      route,
+      anchors: new Set(headings.map((heading) => heading.id)),
+      generated: true,
+    },
+  };
 }
 
 export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficial = false }) {
@@ -1078,7 +1381,8 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
   }
   if (!Array.isArray(authors?.authors)) throw new Error('authors.yml: authors list is required');
 
-  const { ordered, pages: pageSources } = discoverPages(toc);
+  const tocModel = parseToc(toc);
+  const { ordered, pageSources } = tocModel;
   const warnings = [];
   const loaded = [];
   const snapshots = new Map([
@@ -1087,19 +1391,42 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
     ['authors.yml', authorsBuffer],
   ]);
   let requirementCount = 0;
+  const linkedDecisionRecords = [];
+  // ordered grows while it is read, as linked decision records are found.
   for (const sourceName of ordered) {
     const sourceBuffer = await readFile(path.join(absoluteSourceRoot, sourceName));
     snapshots.set(sourceName, sourceBuffer);
-    const normalized = normalizeDuplicateAnchors(sourceBuffer.toString('utf8'), sourceName);
+    // terminology.yml and references.yml are rendered from their data; the source bytes stay in the digest.
+    const yaml = /\.ya?ml$/i.test(sourceName) ? yamlPage(sourceName, sourceBuffer.toString('utf8')) : undefined;
+    const normalized = normalizeDuplicateAnchors(yaml ? yaml.markdown : sourceBuffer.toString('utf8'), sourceName);
     warnings.push(...normalized.warnings);
     const source = normalized.source;
     const tree = parser.parse(source);
     const { node: frontmatterNode, value: frontmatter } = sourceFrontmatter(tree);
     const headings = headingDetails(tree, sourceName);
-    const title = pageLabel(sourceName, frontmatter, headings);
+    const title = yaml?.title ?? pageLabel(sourceName, frontmatter, headings);
     const route = routeFor(sourceName);
     const anchors = new Set([...headings.map((heading) => heading.id), ...standaloneAnchors(tree)]);
-    requirementCount += frontmatter.requirements?.length ?? 0;
+    // Decision records are not yet part of toc.yml. One that a published page links to
+    // is published as a resource, so that the link resolves; it is followed in turn.
+    for (const reference of localReferences(tree)) {
+      if (isExternalReference(reference) || reference.startsWith('#')) continue;
+      const { pathname } = splitReference(reference);
+      if (!pathname.endsWith('.md')) continue;
+      const target = localTarget(sourceName, decodedPathname(sourceName, pathname));
+      if (!target.startsWith('ADR/') || pageSources.has(target)) continue;
+      try {
+        if (!(await stat(path.join(absoluteSourceRoot, target))).isFile()) continue;
+      } catch (error) {
+        if (error.code === 'ENOENT') continue;
+        throw error;
+      }
+      ordered.push(target);
+      pageSources.add(target);
+      linkedDecisionRecords.push(target);
+      warnings.push(`${target}: not listed in toc.yml; published under resources because ${sourceName} links to it`);
+    }
+    requirementCount += flattenRequirements(frontmatter.requirements).length;
     loaded.push({
       sourceName,
       source,
@@ -1112,11 +1439,53 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
       anchors,
     });
   }
+  if (linkedDecisionRecords.length) {
+    let resources = tocModel.sections.find((section) => section.key === 'resources');
+    if (!resources) {
+      resources = { key: 'resources', items: [] };
+      tocModel.sections.push(resources);
+    }
+    resources.items.push(...linkedDecisionRecords.map((source) => ({ kind: 'page', source })));
+  }
   const pagesBySource = new Map(loaded.map((page) => [page.sourceName, page]));
+  const profiles = resolveProfiles(tocModel.profiles, pagesBySource, warnings);
+  for (const profile of profiles) {
+    // A profile is cited by its folder name, so its introduction is served at the folder's route.
+    const page = pagesBySource.get(profile.introduction);
+    page.route = page.route.replace(/\/introduction$/, '');
+  }
+  if (profiles.length && tocModel.sections.some((section) => section.key === 'requirements')) {
+    warnings.push('toc.yml: requirements is replaced by conformance-profiles; list every functionality under its profile');
+  }
   addArchiveCompatibilityAnchors(loaded, warnings);
   const pageRoutes = new Map(loaded.map((page) => [page.sourceName, page.route]));
   const pageAnchors = new Map(loaded.map((page) => [page.sourceName, page.anchors]));
+  for (const profile of profiles) {
+    const page = pagesBySource.get(profile.introduction);
+    const targets = localReferences(page.tree)
+      .filter((reference) => !isExternalReference(reference) && !reference.startsWith('#'))
+      .map((reference) => splitReference(reference).pathname)
+      .filter((pathname) => pathname.endsWith('.md'))
+      .map((pathname) => localTarget(page.sourceName, decodedPathname(page.sourceName, pathname)));
+    checkProfileFunctionalityLinks(profile, targets, warnings);
+  }
+  const functionalityPages = loaded.filter((page) => page.frontmatter.requirements?.length);
+  for (const page of functionalityPages) checkOptions(page, profileForSource(profiles, page.sourceName), warnings);
+  const conditions = collectConditions(functionalityPages, profiles, warnings);
+  const keyView = keyViewPage({ conditions, profiles, pageRoutes, base: normalizedBase, metadata, warnings });
   const referencedSupportPaths = collectReferencedSupportPaths(loaded, pageSources);
+  for (const folder of tocModel.folders) {
+    let details;
+    try {
+      details = await stat(path.join(absoluteSourceRoot, folder));
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    if (!details?.isDirectory()) {
+      throw new Error(`toc.yml: the folder entry ${path.posix.basename(folder)}/ resolves to ${folder}/, which is not a folder in the source`);
+    }
+    referencedSupportPaths.add(folder);
+  }
   assertReferencedSupportPathsAllowed(referencedSupportPaths);
   const supportFiles = await copySupportFiles(
     absoluteSourceRoot,
@@ -1140,7 +1509,27 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
     reference.title = page.title;
     reference.route = page.route;
   }
-  const sidebar = apiReferenceSidebar(sidebarFromToc(toc, pagesBySource), apiReferences.references, pagesBySource);
+  if (keyView) {
+    if ([...pageRoutes.values()].includes(keyView.route)) {
+      throw new Error(`${keyView.route}: a source page already uses the route of the generated ${keyView.title} page`);
+    }
+    loaded.push(keyView.page);
+    pageRoutes.set(keyView.page.sourceName, keyView.route);
+  }
+  const sidebar = apiReferenceSidebar(
+    sidebarFromToc(tocModel, pagesBySource, { profiles, keyView }),
+    apiReferences.references,
+    pagesBySource,
+  );
+  const renderContext = {
+    pageRoutes,
+    base: normalizedBase,
+    profiles,
+    profilesById: new Map(profiles.map((profile) => [profile.id, profile])),
+    capabilities: new Map((metadata.capabilities ?? []).map((capability) => [String(capability.id), capability])),
+    keyView,
+    warnings,
+  };
 
   await pruneFormerGeneratedPages(absoluteSiteRoot, loaded);
 
@@ -1153,6 +1542,7 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
       metadata,
       authors,
       unofficial,
+      context: renderContext,
     });
     const reference = apiReferences.references.find((item) => item.page === page.sourceName);
     if (reference) {
@@ -1175,6 +1565,7 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
     referencedSupportPaths,
     supportFiles,
     unofficial,
+    tocModel.folders,
   );
   const redirects = await writeRedirects(absoluteSiteRoot, loaded, normalizedBase, unofficial);
   const sourceState = await gitSourceState(absoluteSourceRoot);
@@ -1198,6 +1589,15 @@ export async function generateSite({ sourceRoot, siteRoot, base = '/', unofficia
       route: page.route,
       title: page.title,
       anchors: [...page.anchors].map((id) => ({ id })),
+      ...(page.generated ? { generated: true } : {}),
+    })),
+    profiles: profiles.map((profile) => ({
+      id: profile.id,
+      type: profile.type,
+      title: profile.title,
+      requires: profile.requires,
+      route: pageRoutes.get(profile.introduction),
+      functionalities: profile.functionalities,
     })),
   };
   const manifestPath = path.join(absoluteSiteRoot, 'src/data/generated/spec.json');

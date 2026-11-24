@@ -357,8 +357,9 @@ test('generator rewrites routes, renders requirement semantics, copies aliases, 
   assert.match(requirements, /class="requirement-key-row">[\s\S]*registry-service/);
   assert.match(requirements, /Option of/);
   assert.match(requirements, /Inherited option obligation/);
-  assert.match(requirements, /Any of/);
-  assert.match(requirements, /All of/);
+  assert.match(requirements, /<dt>Applies when any of<\/dt>/);
+  assert.match(requirements, /<dt>Applies when all of<\/dt>/);
+  assert.match(requirements, /<dt>Verification<\/dt><dd>Tested at the Service API boundary<\/dd>/);
   assert.match(requirements, /<dt>Type<\/dt><dd>Extension<\/dd>/);
   assert.match(requirements, /consultation-retrieve/);
   assert.match(requirements, /class="requirement-documentation requirement-constraint">[\s\S]*Preserve source meaning/);
@@ -690,17 +691,23 @@ test('canonical source integration renders its requirements without changing sou
 
   const manifest = await generateSite({ sourceRoot: canonicalSourceRoot, siteRoot, base: '/' });
 
-  const sourceRows = await Promise.all(manifest.pages.map(async (page) => {
+  const sourceRows = await Promise.all(manifest.pages.filter((page) => !page.generated).map(async (page) => {
     const source = await readFile(path.join(canonicalSourceRoot, page.source), 'utf8');
     const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(source);
     return frontmatter ? YAML.parse(frontmatter[1])?.requirements ?? [] : [];
   }));
-  const expectedRequirements = sourceRows.reduce((total, rows) => total + rows.length, 0);
+  const expectedRequirements = sourceRows.reduce(
+    (total, rows) => total + rows.length + rows.reduce((options, row) => options + (row?.options?.length ?? 0), 0),
+    0,
+  );
   assert.ok(expectedRequirements > 0);
   assert.equal(manifest.requirementCount, expectedRequirements);
   const toc = YAML.parse(await readFile(path.join(canonicalSourceRoot, 'toc.yml'), 'utf8')).toc;
   for (const [section, entries] of Object.entries(toc)) {
-    for (const entry of entries) assert.ok(manifest.pages.some((page) => page.source === `${section}/${entry}`));
+    for (const entry of entries ?? []) {
+      if (typeof entry !== 'string' || entry.endsWith('/')) continue;
+      assert.ok(manifest.pages.some((page) => page.source === `${section}/${entry}`));
+    }
   }
   assert.equal(manifest.sourceRevision, beforeRevision.stdout.trim());
   assert.equal(manifest.sourceDirty, beforeStatus.stdout.trim() !== '');
@@ -715,7 +722,7 @@ test('canonical source integration renders its requirements without changing sou
   assert.equal((requirements.match(/<article class="requirement-card /g) ?? []).length, servicesRows.length);
   assert.equal((requirements.match(/class="requirement-card-title requirement-statement"/g) ?? []).length, servicesRows.length);
   assert.equal((requirements.match(/class="requirement-draft-id">Unnumbered draft/g) ?? []).length, unnumbered);
-  assert.match(requirements, /Any of/);
+  assert.match(requirements, /Applies when/);
   assert.match(requirements, /Minimum selections/);
 
   await assertArchivePagesExcluded(siteRoot, manifest.pages);
